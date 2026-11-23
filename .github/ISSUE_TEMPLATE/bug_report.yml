@@ -1,0 +1,30 @@
+name: Fehler melden
+description: Etwas funktioniert nicht wie beschrieben.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Was ist passiert, was hast du erwartet?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Schritte zum Nachstellen
+      placeholder: "1. Quelle X gewählt\n2. …"
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versionen
+      description: Merge & Review (unten im Panel), Orca (`orca --version`), Git (`git --version`), Betriebssystem
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Plugin-Log
+      description: "`orca plugin logs <plugin-key>`. Bitte vorher Pfade und Namen entfernen."
+      render: text

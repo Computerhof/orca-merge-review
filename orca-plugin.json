@@ -1,0 +1,212 @@
+{
+  "manifestVersion": 2,
+  "id": "merge-review",
+  "name": "Merge & Review",
+  "version": "0.1.0",
+  "description": "Review branches and agent workspaces before you merge, predict conflicts, merge, resolve conflicts block by block in a wide tab, and hand reviews or conflicts to agents.",
+  "license": "MIT",
+  "repository": "https://github.com/Computerhof/orca-merge-review",
+  "homepage": "https://github.com/Computerhof/orca-merge-review",
+  "engines": {
+    "orca": ">=1.4.259"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "merge-review",
+        "title": "Merge & Review",
+        "icon": "branch",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "customEditors": [
+      {
+        "id": "review",
+        "title": "Merge & Review",
+        "extensions": [
+          ".mergereview"
+        ],
+        "entry": "src/editor/review.ts",
+        "frame": "isolated"
+      }
+    ],
+    "commands": [
+      {
+        "id": "mergeReview.open",
+        "title": "Merge & Review: Übersicht öffnen",
+        "when": "workspace"
+      },
+      {
+        "id": "mergeReview.nextConflict",
+        "title": "Merge & Review: Nächsten Konflikt öffnen",
+        "when": "workspace"
+      },
+      {
+        "id": "mergeReview.compareBase",
+        "title": "Merge & Review: Mit Base vergleichen",
+        "when": "workspace"
+      },
+      {
+        "id": "mergeReview.finish",
+        "title": "Merge & Review: Merge abschließen",
+        "when": "workspace"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "mergeReview.open",
+        "key": "Mod+Alt+M",
+        "when": "workspace"
+      },
+      {
+        "command": "mergeReview.nextConflict",
+        "key": "Mod+Alt+J",
+        "when": "workspace"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "merge",
+        "text": "Merge",
+        "icon": "branch",
+        "tone": "warning",
+        "tooltip": "Merge & Review",
+        "command": "mergeReview.nextConflict"
+      }
+    ],
+    "events": [
+      {
+        "on": "workspace.changed"
+      },
+      {
+        "on": "agent.status.changed"
+      },
+      {
+        "on": "workspace.removed"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "agent.tool.before"
+      },
+      {
+        "event": "agent.tool.after"
+      },
+      {
+        "event": "editor.save.before"
+      }
+    ],
+    "settings": [
+      {
+        "key": "defaultMode",
+        "title": "Standard-Merge-Art",
+        "type": "string",
+        "default": "no-ff",
+        "enum": [
+          "no-ff",
+          "ff",
+          "ff-only",
+          "squash"
+        ],
+        "enumLabels": [
+          "Merge-Commit (--no-ff)",
+          "Fast-forward wenn möglich",
+          "Nur Fast-forward",
+          "Squash (ein Commit)"
+        ]
+      },
+      {
+        "key": "showBase",
+        "title": "Gemeinsame Basis in Konflikten zeigen (diff3)",
+        "description": "Schreibt beim Merge den gemeinsamen Vorfahren in jeden Konfliktblock.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "agent",
+        "title": "Agent für Reviews, Konflikte und den Merge-Wächter",
+        "type": "string",
+        "default": "claude",
+        "enum": [
+          "claude",
+          "codex",
+          "gemini",
+          "opencode",
+          "copilot",
+          "cursor",
+          "droid",
+          "kiro"
+        ],
+        "enumLabels": [
+          "Claude Code",
+          "Codex",
+          "Gemini",
+          "OpenCode",
+          "Copilot",
+          "Cursor",
+          "Droid",
+          "Kiro"
+        ]
+      },
+      {
+        "key": "guardAgents",
+        "title": "Agenten-Schutz",
+        "description": "Blockiert während eines Merges Git-Befehle von Agenten, die ihn zerstören würden (reset --hard, merge --abort, stash, …), und Force-Push immer.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "notifyAgentDone",
+        "title": "Melden, wenn ein verglichener Agent fertig ist",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "watchSchedule",
+        "title": "Zeitplan des Merge-Wächters (Cron)",
+        "type": "string",
+        "default": "0 8 * * 1-5",
+        "placeholder": "0 8 * * 1-5"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    },
+    {
+      "kind": "agent:read"
+    },
+    {
+      "kind": "agent:launch"
+    },
+    {
+      "kind": "terminal:send"
+    },
+    {
+      "kind": "notifications:show"
+    },
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "automation:read"
+    },
+    {
+      "kind": "automation:write"
+    },
+    {
+      "kind": "history:read"
+    }
+  ]
+}

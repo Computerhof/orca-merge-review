@@ -1,0 +1,3 @@
+#!/bin/sh
+# Blocks secrets, personal paths, private markers and a private commit identity.
+exec node scripts/check-private.mjs --staged

@@ -1,0 +1,14 @@
+name: Idee vorschlagen
+description: Ein Arbeitsablauf, den das Plugin besser unterstützen sollte.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: job
+    attributes:
+      label: Welchen Arbeitsablauf willst du erledigen?
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: Wie machst du das heute, und wo hakt es?

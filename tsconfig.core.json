@@ -1,0 +1,17 @@
+{
+  "//": "Type-checks the Orca-free core (src/core, src/git, src/types.ts) and its tests. Runs in CI, where Orca's generated typings do not exist.",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["src/core", "src/git", "src/types.ts", "src/version.ts", "test"]
+}

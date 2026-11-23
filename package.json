@@ -1,0 +1,27 @@
+{
+  "name": "merge-review",
+  "private": true,
+  "description": "Dev tooling for the Merge & Review Orca plugin. The plugin version lives in orca-plugin.json only.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
+    "typecheck": "tsc -p tsconfig.core.json && tsc -p .",
+    "test": "node --test \"test/**/*.spec.ts\"",
+    "test:orca": "orca plugin test . --json",
+    "check:private": "node scripts/check-private.mjs --all",
+    "check": "npm run typecheck && npm test && npm run check:private",
+    "typecheck:core": "tsc -p tsconfig.core.json"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Computerhof/orca-merge-review.git"
+  }
+}
