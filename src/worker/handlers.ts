@@ -8,6 +8,7 @@ import type { Memory } from './memory.ts'
 import type { Monitor } from './monitor.ts'
 import { openReviewTab } from './reviewTab.ts'
 import type { SettingsCache } from './settings.ts'
+import { focusAgent } from './circles.ts'
 import { findWatch, setWatch } from './watch.ts'
 import type { Workspaces } from './workspaces.ts'
 
@@ -263,6 +264,14 @@ export function registerHandlers(deps: Deps): void {
         prompt
       })
       return { how: 'launched' as const, terminalId: launched.terminalId }
+    })
+  )
+
+  orca.panels.handle(
+    'agent.focus',
+    guarded(deps, async ({ workspaceId, source }) => {
+      const ws = await workspaces.resolve(workspaceId)
+      return { how: await focusAgent({ orca, workspaces, monitor, settings }, ws, source) }
     })
   )
 

@@ -1,13 +1,13 @@
 // The real worker (src/worker.ts) over a mock Orca host and a real Git repository.
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as main from './worker'
 import { divergentRepo, hostResults } from './testing/fixture'
 
 const manifest = {
   events: ['workspace.changed', 'agent.status.changed', 'workspace.removed'],
-  hooks: ['agent.tool.before', 'agent.tool.after', 'editor.save.before'],
+  hooks: ['agent.tool.before', 'agent.tool.after', 'editor.save.before', 'agent.prompt.before'],
   commands: ['mergeReview.open', 'mergeReview.nextConflict', 'mergeReview.compareBase', 'mergeReview.finish']
 }
 
@@ -123,6 +123,82 @@ test('the merge watch is created as an Orca automation for the base', async () =
     assert.equal(p.schedule, '0 8 * * 1-5')
     assert.match(p.name, /^Merge-Wächter: main/)
     assert.match(p.prompt, /Ändere nichts/)
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('K13: a conflicted file saved without markers is marked resolved', async () => {
+  const dir = divergentRepo()
+  const host = mockHost({ results: hostResults(dir) })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    await worker.request('merge.run', { source: 'feature', mode: 'no-ff' })
+    const resolved = 'eins\nZWEI-feature\ndrei\n'
+    writeFileSync(join(dir, 'a.txt'), resolved)
+    const d = await worker.hooks.fire('editor.save.before', { workspaceId: 'ws-main', path: join(dir, 'a.txt'), languageId: 'plaintext', text: resolved })
+    assert.equal(d.kind, 'continue', 'a save is never refused')
+    await new Promise((r) => setTimeout(r, 1500))
+    const st = await worker.request('repo.state', {})
+    assert.deepEqual(st.merge?.conflicts, [])
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('K13: a save that still has markers changes nothing', async () => {
+  const dir = divergentRepo()
+  const host = mockHost({ results: hostResults(dir) })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    await worker.request('merge.run', { source: 'feature', mode: 'no-ff' })
+    const text = readFileSync(join(dir, 'a.txt'), 'utf8')
+    await worker.hooks.fire('editor.save.before', { workspaceId: 'ws-main', path: join(dir, 'a.txt'), text })
+    await new Promise((r) => setTimeout(r, 1000))
+    assert.deepEqual((await worker.request('repo.state', {})).merge?.conflicts, ['a.txt'])
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('K14: a prompt to an agent in a merging workspace gets the one-line hint', async () => {
+  const dir = divergentRepo()
+  const host = mockHost({ results: hostResults(dir, { 'terminal.list': { terminals: [{ id: 'term-x' }], truncated: false } }) })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    const idle = await worker.hooks.fire('agent.prompt.before', { agent: 'claude', terminalId: 'term-x', prompt: 'mach weiter', inputKind: 'driving' })
+    assert.equal(idle.kind, 'continue')
+    assert.equal((idle as { event?: { prompt: string } }).event?.prompt ?? 'mach weiter', 'mach weiter', 'no merge, no hint')
+
+    await worker.request('merge.run', { source: 'feature', mode: 'no-ff' })
+    const d = await worker.hooks.fire('agent.prompt.before', { agent: 'claude', terminalId: 'term-x', prompt: 'mach weiter', inputKind: 'driving' })
+    assert.equal(d.kind, 'continue')
+    const prompt = (d as { event: { prompt: string } }).event.prompt
+    assert.match(prompt, /^\[Merge & Review\] In diesem Workspace läuft ein Merge/)
+    assert.match(prompt, /mach weiter$/)
+    assert.ok(!prompt.includes('\n'))
+
+    const other = await worker.hooks.fire('agent.prompt.before', { agent: 'claude', terminalId: 'term-elsewhere', prompt: 'x', inputKind: 'driving' })
+    assert.equal((other as { event?: { prompt: string } }).event?.prompt ?? 'x', 'x', 'other terminals are left alone')
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('K15: "Zum Agenten" focuses the agent terminal of the source workspace', async () => {
+  const dir = divergentRepo()
+  const host = mockHost({
+    results: hostResults(dir, {
+      'agents.list': { agents: [{ terminalId: 'term-agent', title: 'claude', agent: 'claude', state: 'working', stateStartedAt: 0 }] },
+      'terminal.focus': { focused: true },
+      'workspace.open': { opened: true }
+    })
+  })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    assert.equal((await worker.request('agent.focus', { source: 'feature' })).how, 'terminal')
+    assert.deepEqual(host.callsOf('agents.list')[0], { workspaceId: 'ws-feature' })
+    assert.deepEqual(host.callsOf('terminal.focus')[0], { terminalId: 'term-agent' })
   } finally {
     await worker.deactivate()
   }

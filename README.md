@@ -20,8 +20,10 @@ Version: siehe `orca-plugin.json` (wird unten im Panel und im Tab angezeigt) · 
 | **Mergen** | Merge-Commit, Fast-forward, nur Fast-forward oder Squash. Bestätigung in zwei Schritten, die Commits, Dateien, erwartete Konflikte und einen noch arbeitenden Agenten nennt. Gesperrt (mit Begründung) bei schmutzigem Arbeitsbaum oder losgelöstem HEAD. |
 | **Konflikte** | Pro Block *Dein Stand / Gemeinsame Basis / Eingehend*, mit diff3 als Standard. Übernehmen: Meins, Eingehend, Beide, Basis (Tasten 1/2/3, `n` = nächste Datei). Ganze Datei von einer Seite, im normalen Editor bearbeiten, als gelöst markieren, abschließen oder abbrechen. |
 | **Rückgängig** | Direkt nach einem Merge aus dem Plugin, nur solange seitdem nichts passiert ist. |
-| **Agenten** | *Anmerkung an Agent*: geht an den laufenden Agenten des Quell-Workspace; sonst wird seine letzte Session fortgesetzt, sonst ein neuer Agent gestartet. *Agent löst Konflikte*: startet einen Agenten mit fertigem Auftrag; er committet nicht, du schließt ab. |
-| **Agenten-Schutz** | Während eines Merges blockiert ein Hook zerstörerische Git-Befehle von Agenten (`reset --hard`, `merge --abort`, `stash`, Branch-Wechsel, …), Force-Push immer. Abschaltbar. Eine Leitplanke, keine Sicherheitsgrenze; zur bekannten Einschränkung mit Claude Code im Bypass-Modus siehe [SECURITY.md](SECURITY.md). |
+| **Agenten** | *Zum Agenten*: fokussiert das Terminal des Agenten einer Quelle. *Anmerkung an Agent*: geht an den laufenden Agenten des Quell-Workspace; sonst wird seine letzte Session fortgesetzt, sonst ein neuer Agent gestartet. *Agent löst Konflikte*: startet einen Agenten mit fertigem Auftrag; er committet nicht, du schließt ab. |
+| **Agenten-Schutz** | Während eines Merges blockiert ein Hook zerstörerische Git-Befehle von Agenten (`reset --hard`, `merge --abort`, `stash`, Branch-Wechsel, …), Force-Push immer. Prompts an Agenten in einem Workspace mit laufendem Merge bekommen einen kurzen Hinweis vorangestellt. Abschaltbar. Eine Leitplanke, keine Sicherheitsgrenze; zur bekannten Einschränkung mit Claude Code im Bypass-Modus siehe [SECURITY.md](SECURITY.md). |
+| **Speichern = gelöst** | Speicherst du eine Konfliktdatei im Orca-Editor ohne Konfliktmarker, wird sie automatisch als gelöst markiert (abschaltbar). |
+| **Export** | Der Review-Tab speichert Vergleich, Commits, Dateien und deine Notizen als Markdown, z. B. für einen PR-Text. |
 | **Merge-Wächter** | Optionale Orca-Automation: ein Agent prüft nach Zeitplan, ob die Base noch sauber hereinpasst, und ändert dabei nichts. |
 | **Überall sichtbar** | Status-Leiste „Merge: 2 Konflikte offen“ (Klick → nächster Konflikt). Befehle in der Palette. Meldung, wenn der Agent einer verglichenen Quelle fertig ist. Panel und Tab aktualisieren sich nach eigenen Aktionen, Git-Befehlen von Agenten, Speichern und Workspace-Wechsel. |
 
@@ -55,7 +57,7 @@ Orca zeigt vor der Freigabe, welche Rechte das Plugin bekommt, und warum es sie 
 | `notifications:show`, `storage:own`, `settings:own` | Meldungen, eigene Merkliste, Einstellungen |
 
 Einstellungen (Orca → Settings → Plugins → Merge & Review): Standard-Merge-Art, diff3, Agent,
-Agenten-Schutz, Meldungen, Zeitplan des Merge-Wächters.
+Agenten-Schutz (mit Prompt-Hinweis), Speichern = gelöst, Meldungen, Zeitplan des Merge-Wächters.
 
 ### Wo die Hilfsdatei liegt
 

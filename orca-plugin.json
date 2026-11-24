@@ -98,6 +98,9 @@
       },
       {
         "event": "editor.save.before"
+      },
+      {
+        "event": "agent.prompt.before"
       }
     ],
     "settings": [
@@ -156,6 +159,13 @@
         "key": "guardAgents",
         "title": "Agenten-Schutz",
         "description": "Blockiert während eines Merges Git-Befehle von Agenten, die ihn zerstören würden (reset --hard, merge --abort, stash, …), und Force-Push immer.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "autoMarkResolved",
+        "title": "Konfliktdatei beim Speichern als gelöst markieren",
+        "description": "Speicherst du eine Konfliktdatei im Editor ohne Konfliktmarker, wird sie automatisch als gelöst markiert (git add).",
         "type": "boolean",
         "default": true
       },
