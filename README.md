@@ -20,6 +20,8 @@ Version: siehe `orca-plugin.json` (wird unten im Panel und im Tab angezeigt) · 
 | **Review-Tab** | Breiter Editor-Tab: Dateiliste links, Side-by-Side-Diff rechts. Ein Klick auf eine Zeilennummer fügt sie in eine Anmerkung an den Agenten ein. |
 | **Mergen** | Merge-Commit, Fast-forward, nur Fast-forward oder Squash. Bestätigung in zwei Schritten, die Commits, Dateien, erwartete Konflikte und einen noch arbeitenden Agenten nennt. Gesperrt (mit Begründung) bei schmutzigem Arbeitsbaum oder losgelöstem HEAD. |
 | **Konflikte** | Pro Block *Dein Stand / Gemeinsame Basis / Eingehend*, mit diff3 als Standard. Übernehmen: Meins, Eingehend, Beide, Basis (Tasten 1/2/3, `n` = nächste Datei). Ganze Datei von einer Seite, im normalen Editor bearbeiten, als gelöst markieren, abschließen oder abbrechen. |
+| **Probe-Merge** | Merged die Quelle in einem versteckten Temp-Worktree (mit Tests, wenn ein Testbefehl gesetzt ist). Dein Arbeitsbaum bleibt unberührt, der Temp-Worktree wird danach entfernt. |
+| **Tests nach dem Merge** | Optionaler Testbefehl (z. B. `npm test`) läuft nach jedem Merge im Hintergrund; bei Rot zeigt das Panel die Ausgabe und bietet „Agent repariert“, „Im Terminal ansehen“ und Rückgängig an. |
 | **Rückgängig** | Direkt nach einem Merge aus dem Plugin, nur solange seitdem nichts passiert ist. |
 | **Agenten** | *Zum Agenten*: fokussiert das Terminal des Agenten einer Quelle. *Anmerkung an Agent*: geht an den laufenden Agenten des Quell-Workspace; sonst wird seine letzte Session fortgesetzt, sonst ein neuer Agent gestartet. *Agent löst Konflikte*: startet einen Agenten mit fertigem Auftrag; er committet nicht, du schließt ab. |
 | **Agenten-Schutz** | Während eines Merges blockiert ein Hook zerstörerische Git-Befehle von Agenten (`reset --hard`, `merge --abort`, `stash`, Branch-Wechsel, …), Force-Push immer. Prompts an Agenten in einem Workspace mit laufendem Merge bekommen einen kurzen Hinweis vorangestellt. Abschaltbar. Eine Leitplanke, keine Sicherheitsgrenze; zur bekannten Einschränkung mit Claude Code im Bypass-Modus siehe [SECURITY.md](SECURITY.md). |
@@ -49,7 +51,7 @@ Orca zeigt vor der Freigabe, welche Rechte das Plugin bekommt, und warum es sie 
 
 | Recht | Wofür |
 |---|---|
-| Worker (`trusted-worker`) | Git lokal ausführen |
+| Worker (`trusted-worker`) | Git lokal ausführen; den eingestellten Testbefehl ausführen |
 | `workspace:read` / `workspace:write` | Workspaces und Pfade finden, Review-Tab und Dateien öffnen |
 | `agent:read` | Melden, wenn der Agent einer Quelle fertig ist |
 | `agent:launch`, `terminal:send` | Anmerkungen an Agenten, Agent für Konflikte, Sessions fortsetzen |
@@ -58,7 +60,7 @@ Orca zeigt vor der Freigabe, welche Rechte das Plugin bekommt, und warum es sie 
 | `notifications:show`, `storage:own`, `settings:own` | Meldungen, eigene Merkliste, Einstellungen |
 
 Einstellungen (Orca → Settings → Plugins → Merge & Review): Standard-Merge-Art, diff3, Agent,
-Agenten-Schutz (mit Prompt-Hinweis), Speichern = gelöst, Meldungen, Zeitplan des Merge-Wächters.
+Agenten-Schutz (mit Prompt-Hinweis), Speichern = gelöst, Testbefehl, Meldungen, Zeitplan des Merge-Wächters.
 
 ### Wo die Hilfsdatei liegt
 

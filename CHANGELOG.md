@@ -7,7 +7,18 @@ oder einer Capability-Erweiterung, die Nutzer neu freigeben müssen.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
 ### Hinzugefügt
+- **Tests nach dem Merge:** Mit der Einstellung `testCommand` (z. B. `npm test`) laufen die Tests nach jedem
+  erfolgreichen Merge und Abschluss im Hintergrund. Status-Leiste und Panel zeigen „Tests laufen …“, danach
+  grün oder rot mit den letzten Zeilen. Bei Rot: „Agent repariert“ (startet einen Agenten mit der Ausgabe),
+  „Im Terminal ansehen“, „Erneut“, und „Merge rückgängig“ bleibt erreichbar. Zeitlimit 15 Minuten.
+- **Probe-Merge:** Merged die Quelle in einem versteckten Temp-Worktree und lässt dort die Tests laufen, ohne
+  Arbeitsbaum, Index oder Branches anzufassen; danach wird alles entfernt. Ein `node_modules` des Repos wird
+  verlinkt und vor dem Aufräumen selbst wieder entfernt. Danach „Jetzt echt mergen“.
+- Requests `merge.probe`, `tests.run`, `tests.terminal`, `tests.fix`, `job.cancel`, `job.dismiss`; Event
+  `job.changed`; `RepoState.job`, `RepoState.hasTestCommand`.
 - **Workspaces des Projekts (Merge-Übersicht):** Auf dem Base-Workspace zeigt das Panel alle Workspaces des
   Projekts mit Agent-Status, Commits vor/hinter der Base und Vorhersage; bereite zuerst. Enter oder Doppelklick
   vergleicht. Ergebnisse sind pro Commit-Paar gecacht. Request `overview.list`, `RepoState.base`.

@@ -1,6 +1,6 @@
 // Answers the panel's and the review tab's requests. Thin: Git work lives in core/repo.ts.
 import type { OrcaWorkerApi } from 'orca/worker'
-import { resolveConflictsPrompt, reviewFeedbackPrompt } from '../core/prompts.ts'
+import { resolveConflictsPrompt, reviewFeedbackPrompt, testFixPrompt } from '../core/prompts.ts'
 import { UserError } from '../core/repo.ts'
 import type { RepoState, ReviewView } from '../types.ts'
 import { deliverToAgent, type PendingSends } from './agents.ts'
@@ -9,6 +9,7 @@ import type { Monitor } from './monitor.ts'
 import { openReviewTab } from './reviewTab.ts'
 import type { SettingsCache } from './settings.ts'
 import { focusAgent } from './circles.ts'
+import type { Jobs } from './jobs.ts'
 import { buildOverview } from './overview.ts'
 import { findWatch, setWatch } from './watch.ts'
 import type { Workspaces } from './workspaces.ts'
@@ -20,6 +21,7 @@ export interface Deps {
   monitor: Monitor
   settings: SettingsCache
   pending: PendingSends
+  jobs: Jobs
 }
 
 /** Wraps a handler so a UserError reaches the panel with its message, and the repo gets re-read. */
@@ -42,7 +44,16 @@ function guarded<I extends { workspaceId?: string }, O>(deps: Deps, fn: (input: 
 }
 
 export function registerHandlers(deps: Deps): void {
-  const { orca, workspaces, memory, monitor, settings, pending } = deps
+  const { orca, workspaces, memory, monitor, settings, pending, jobs } = deps
+  /** K11: after a successful merge, the tests run by themselves when a command is set. */
+  const testAfterMerge = (ws: Parameters<Jobs['runTests']>[0], source: string | null) => {
+    if (!jobs.testCommand) return
+    try {
+      jobs.runTests(ws, source)
+    } catch (error) {
+      orca.log(`tests after merge: ${(error as Error).message}`)
+    }
+  }
   const touches = true
 
   orca.panels.handle(
@@ -64,7 +75,9 @@ export function registerHandlers(deps: Deps): void {
           merge: null,
           sources: [],
           suggestedSource: null,
-          lastMerge: null
+          lastMerge: null,
+          job: null,
+          hasTestCommand: !!jobs.testCommand
         }
       }
       // One ref listing serves the state, the base guess and the source list.
@@ -84,7 +97,16 @@ export function registerHandlers(deps: Deps): void {
       const suggested =
         (lastSource && sources.some((s) => s.ref === lastSource) ? lastSource : null) ??
         (base && base !== core.branch ? base : sources[0]?.ref ?? null)
-      return { ...core, workspace: ws.info, base, sources, suggestedSource: suggested, lastMerge: undoable }
+      return {
+        ...core,
+        workspace: ws.info,
+        base,
+        sources,
+        suggestedSource: suggested,
+        lastMerge: undoable,
+        job: jobs.get(ws.info.id),
+        hasTestCommand: !!jobs.testCommand
+      }
     })
   )
 
@@ -123,6 +145,7 @@ export function registerHandlers(deps: Deps): void {
         } else if (outcome.status !== 'up-to-date') {
           await memory.setLastMerge(ws.info.id, { source, before, after: await ws.repo.head(), at: Date.now(), commits })
           void orca.host.call('notifications.show', { title: 'Merge & Review', body: outcome.message }).catch(() => {})
+          testAfterMerge(ws, source)
         }
         return outcome
       },
@@ -157,6 +180,7 @@ export function registerHandlers(deps: Deps): void {
           await memory.setPending(ws.info.id, null)
         }
         void orca.host.call('notifications.show', { title: 'Merge & Review', body: 'Merge abgeschlossen.' }).catch(() => {})
+        testAfterMerge(ws, p?.source ?? null)
         return { hash }
       },
       touches
@@ -266,6 +290,70 @@ export function registerHandlers(deps: Deps): void {
         prompt
       })
       return { how: 'launched' as const, terminalId: launched.terminalId }
+    })
+  )
+
+  // --- K11/K12: tests and probe merges run in the background; results come as job.changed.
+  orca.panels.handle(
+    'merge.probe',
+    guarded(deps, async ({ workspaceId, source, withTests }) => {
+      const ws = await workspaces.resolve(workspaceId)
+      await ws.repo.verify(source)
+      jobs.probe(ws, source, withTests ?? true)
+      return { started: true as const }
+    })
+  )
+
+  orca.panels.handle(
+    'tests.run',
+    guarded(deps, async ({ workspaceId }) => {
+      const ws = await workspaces.resolve(workspaceId)
+      jobs.runTests(ws, jobs.get(ws.info.id)?.source ?? null)
+      return { started: true as const }
+    })
+  )
+
+  orca.panels.handle(
+    'tests.terminal',
+    guarded(deps, async ({ workspaceId }) => {
+      const ws = await workspaces.resolve(workspaceId)
+      const command = jobs.testCommand
+      if (!command) throw new UserError('Kein Testbefehl eingestellt.')
+      return orca.host.call('terminal.create', { workspaceId: ws.info.id, title: 'Merge & Review: Tests', command })
+    })
+  )
+
+  orca.panels.handle(
+    'tests.fix',
+    guarded(deps, async ({ workspaceId }) => {
+      const ws = await workspaces.resolve(workspaceId)
+      const job = jobs.get(ws.info.id)
+      if (!job || job.status !== 'failed' || !job.command) throw new UserError('Es gibt keinen roten Testlauf.')
+      const prompt = testFixPrompt({
+        target: ws.row.branch ?? ws.info.name,
+        source: job.source,
+        command: job.command,
+        exitCode: job.exitCode,
+        tail: job.tail
+      })
+      const launched = await orca.host.call('agent.launch', { workspaceId: ws.info.id, agent: settings.current.agent, prompt })
+      return { how: 'launched' as const, terminalId: launched.terminalId }
+    })
+  )
+
+  orca.panels.handle(
+    'job.cancel',
+    guarded(deps, async ({ workspaceId }) => {
+      jobs.cancel((await workspaces.resolve(workspaceId)).info.id)
+      return { ok: true as const }
+    })
+  )
+
+  orca.panels.handle(
+    'job.dismiss',
+    guarded(deps, async ({ workspaceId }) => {
+      jobs.dismiss((await workspaces.resolve(workspaceId)).info.id)
+      return { ok: true as const }
     })
   )
 

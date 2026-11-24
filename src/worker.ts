@@ -4,6 +4,7 @@ import type { OrcaWorkerApi } from 'orca/worker'
 import { commandOf, guardDecision, runsGit } from './core/gitGuard.ts'
 import { LocalGitRunner } from './git/runner.ts'
 import { PendingSends } from './worker/agents.ts'
+import { Jobs } from './worker/jobs.ts'
 import { onSave, promptHint } from './worker/circles.ts'
 import { registerHandlers } from './worker/handlers.ts'
 import { Memory } from './worker/memory.ts'
@@ -14,18 +15,24 @@ import { Workspaces } from './worker/workspaces.ts'
 
 let monitor: Monitor | null = null
 let pendingSends: PendingSends | null = null
+let jobs: Jobs | null = null
 
 export default async function activate(orca: OrcaWorkerApi): Promise<void> {
-  const workspaces = new Workspaces(orca, new LocalGitRunner())
+  const runner = new LocalGitRunner()
+  const workspaces = new Workspaces(orca, runner)
   const memory = new Memory(orca)
   const settings = new SettingsCache()
+  const jobRunner = new Jobs(orca, runner, settings)
+  jobs = jobRunner
   const pending = new PendingSends(orca)
   pendingSends = pending
   void workspaces.list().catch(() => {}) // hooks map workspace ids synchronously from this listing
   monitor = new Monitor(orca, workspaces)
   const mon = monitor
+  mon.jobOf = (id) => jobRunner.get(id)
+  jobRunner.onChange = (id) => mon.repaint(id)
 
-  registerHandlers({ orca, workspaces, memory, monitor: mon, settings, pending })
+  registerHandlers({ orca, workspaces, memory, monitor: mon, settings, pending, jobs: jobRunner })
 
   // --- Events: follow focus, notice agents finishing, forget removed workspaces.
   orca.events.on('workspace.changed', ({ context }) => mon.setFocused(context?.workspaceId ?? null))
@@ -127,4 +134,6 @@ export function deactivate(): void {
   monitor = null
   pendingSends?.dispose()
   pendingSends = null
+  jobs?.dispose()
+  jobs = null
 }

@@ -144,6 +144,12 @@ Konfliktdateien werden automatisch als gelöst markiert, mit Hinweis; abschaltba
 | **K14 Merge-Hinweis an Agenten** | Prompt an einen Agenten in einem Workspace mit laufendem Merge | Orca stellt dem Prompt einen kurzen Hinweis voran: Merge läuft, nicht abbrechen, nicht committen. Ergänzt den Agenten-Schutz | Hook `agent.prompt.before`, `terminal.list` |
 | **K15 Zum Agenten** | Agent-Badge einer Quelle | „Zum Agenten“ fokussiert das Terminal des Agenten, sonst öffnet es den Workspace | `agents.list`, `terminal.focus`, `workspace.open` |
 
+**Umsetzungsstand (v0.2.0, 2026-11-24):** K10–K15 und die kleineren Ergänzungen sind umgesetzt und mit
+`orca plugin test` (Mock-Host, echtes Git) sowie Kern-Tests in CI abgedeckt. Live in Orca geprüft: Übersicht
+(`overview.list`), Probe-Merge im Temp-Worktree inkl. Aufräumen, Hook `agent.prompt.before` ohne Merge.
+**Noch nicht live geprüft:** Speichern = gelöst mit echtem Editor-Speichern, Merge-Hinweis an einen echten Agenten,
+„Zum Agenten“, Tests nach einem echten Merge, Export-Dialog.
+
 Kleinere Ergänzungen: Der Review-Tab übernimmt Schrift und Größe von Orcas Editor
 (`editor.readTypography`). Notizen im Tab bleiben pro Datei erhalten und lassen sich mit Vergleich, Commits
 und Dateien als Markdown speichern (`files.saveAs`), z. B. für einen PR-Text.

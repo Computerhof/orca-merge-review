@@ -59,6 +59,10 @@ export interface RepoState {
   workspace: WorkspaceInfo | null
   /** The project's base branch (remote default, else main/master/develop); null if none. */
   base: string | null
+  /** The plugin's running or last job here (tests, probe merge), until dismissed. */
+  job: JobState | null
+  /** Whether a test command is configured (setting `testCommand`). */
+  hasTestCommand: boolean
   /** Why the panel cannot work here, in words for the person; null when it can. */
   problem: string | null
   branch: string | null
@@ -118,6 +122,25 @@ export interface MergePreview {
   upToDate: boolean
   /** True when target can fast-forward to source. */
   fastForward: boolean
+}
+
+/** K11/K12: a long-running job of the plugin in one workspace: tests after a merge, or a probe merge. */
+export interface JobState {
+  kind: 'tests' | 'probe'
+  status: 'running' | 'passed' | 'clean' | 'failed' | 'conflicts' | 'error'
+  /** The merged or probed source, when there is one. */
+  source: string | null
+  /** The test command, when tests ran or run. */
+  command: string | null
+  startedAt: number
+  finishedAt: number | null
+  exitCode: number | null
+  /** One sentence for the person. */
+  message: string
+  /** The last lines of the test output. */
+  tail: string[]
+  /** Files a probe merge would leave in conflict. */
+  conflicts: string[]
 }
 
 /** K10: one workspace of the project, seen from the base branch. */
