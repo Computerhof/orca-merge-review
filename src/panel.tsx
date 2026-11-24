@@ -66,6 +66,8 @@ const note = atom('')
 const notePath = atom('')
 const watch = atom<MergeWatch | null>(null)
 const overview = atom<Overview | null>(null)
+/** What the person types as the project's test command, before saving; null = not edited. */
+const testDraft = atom<string | null>(null)
 
 // ------------------------------------------------------------------ actions
 
@@ -205,6 +207,7 @@ export function setup(ctx: PanelContext): void {
       if (workspaceId === read(state)?.workspace?.id && src === read(source)) set(stale, true)
     }),
     on('workspace.changed', () => {
+      set(testDraft, null)
       set(comparison, null)
       set(confirm, null)
       void load()
@@ -381,6 +384,7 @@ function ModeCompare({ st }: { st: RepoState }) {
         <Spinner label="Vergleiche …" />
       ) : null}
 
+      <TestSection st={st} />
       <WatchSection st={st} />
     </Stack>
   )
@@ -678,13 +682,13 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
         variant="outline"
         icon="play"
         disabled={working || st.job?.status === 'running'}
-        tooltip={`Merged ${src} in einem temporären Worktree${st.hasTestCommand ? ' und lässt dort die Tests laufen' : ''}. Hier ändert sich nichts.`}
+        tooltip={`Merged ${src} in einem temporären Worktree${st.testCommand ? ` und führt dort „${st.testCommand}“ aus` : ''}. Hier ändert sich nichts.`}
         onPress={async () => {
           const r = await run('Starte Probe-Merge …', () => plugin.request('merge.probe', { source: src }))
           if (r) void load()
         }}
       >
-        {st.hasTestCommand ? 'Probe-Merge mit Tests' : 'Probe-Merge'}
+        {st.testCommand ? 'Probe-Merge mit Tests' : 'Probe-Merge'}
       </Button>
       {conf === 'merge' ? (
         <Callout tone="accent" title={`${src} → ${st.branch} mergen?`}>
@@ -721,6 +725,60 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
         </Button>
       )}
     </Stack>
+  )
+}
+
+/** K11: the project's test command; runs after every merge here and in the probe merge. */
+function TestSection({ st }: { st: RepoState }) {
+  const draft = read(testDraft)
+  const value = draft ?? st.testCommand ?? ''
+  const changed = draft !== null && draft.trim() !== (st.testCommand ?? '')
+  const project = st.projectName ?? st.workspace?.name ?? 'dieses Projekt'
+  const save = async (command: string) => {
+    const r = await run('Speichere …', () => plugin.request('project.setTestCommand', { command }))
+    if (r) {
+      set(testDraft, null)
+      set(notice, { tone: 'success', text: r.testCommand ? `Testbefehl für ${project}: ${r.testCommand}` : `Kein Testbefehl mehr für ${project}.` })
+      await load()
+    }
+  }
+  const suggestion = st.suggestedTest && st.suggestedTest.command !== st.testCommand ? st.suggestedTest : null
+  return (
+    <Collapsible
+      title={st.testCommand ? `Tests für ${project}: ${st.testCommand}` : `Tests für ${project}: keine`}
+      description="Gilt für alle Workspaces dieses Projekts. Läuft nach jedem Merge und beim Probe-Merge."
+      defaultOpen={!st.testCommand && !!suggestion}
+    >
+      <Stack gap="sm">
+        <Input
+          label="Testbefehl"
+          value={value}
+          placeholder={st.suggestedTest?.command ?? 'z. B. npm test'}
+          onChange={(v) => set(testDraft, v)}
+          onSubmit={(v) => void save(v)}
+        />
+        <Row gap="xs" wrap>
+          <Button size="xs" disabled={!changed} onPress={() => void save(value)}>
+            Speichern
+          </Button>
+          {suggestion ? (
+            <Button size="xs" variant="outline" tooltip={suggestion.because} onPress={() => void save(suggestion.command)}>
+              {`Vorschlag übernehmen: ${suggestion.command}`}
+            </Button>
+          ) : null}
+          {st.testCommand ? (
+            <Button size="xs" variant="ghost" icon="play" disabled={st.job?.status === 'running'} onPress={() => act('Starte Tests …', () => plugin.request('tests.run', {}))}>
+              Jetzt ausführen
+            </Button>
+          ) : null}
+          {st.testCommand ? (
+            <Button size="xs" variant="ghost" tone="danger" onPress={() => void save('')}>
+              Entfernen
+            </Button>
+          ) : null}
+        </Row>
+      </Stack>
+    </Collapsible>
   )
 }
 

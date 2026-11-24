@@ -29,6 +29,7 @@ const key = {
   lastMerge: (ws: string) => `lastMerge:${ws}`,
   pending: (ws: string) => `pendingMerge:${ws}`,
   parked: (ws: string) => `parked:${ws}`,
+  testCommand: (project: string) => `testCommand:${project}`,
   watched: 'watchedSources'
 }
 
@@ -59,6 +60,10 @@ export class Memory {
 
   parked = (ws: string) => this.get<Parked>(key.parked(ws))
   setParked = (ws: string, p: Parked | null) => this.put(key.parked(ws), p)
+
+  /** Per Orca project, not per workspace: every workspace of a project runs the same tests. */
+  testCommand = (project: string) => this.get<string>(key.testCommand(project))
+  setTestCommand = (project: string, command: string | null) => this.put(key.testCommand(project), command)
 
   async watched(): Promise<Record<string, Watched>> {
     return (await this.get<Record<string, Watched>>(key.watched)) ?? {}

@@ -22,7 +22,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const workspaces = new Workspaces(orca, runner)
   const memory = new Memory(orca)
   const settings = new SettingsCache()
-  const jobRunner = new Jobs(orca, runner, settings)
+  const jobRunner = new Jobs(orca, runner)
   jobs = jobRunner
   const pending = new PendingSends(orca)
   pendingSends = pending

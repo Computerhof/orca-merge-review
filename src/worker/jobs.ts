@@ -7,7 +7,6 @@ import { runCommand } from '../run/command.ts'
 import { probeMerge } from '../run/probe.ts'
 import type { GitRunner } from '../git/runner.ts'
 import type { JobState } from '../types.ts'
-import type { SettingsCache } from './settings.ts'
 import type { Resolved } from './workspaces.ts'
 
 /** Tests and probes may take long; past this they are stopped. */
@@ -18,28 +17,21 @@ export class Jobs {
   private readonly running = new Map<string, AbortController>()
   private readonly orca: OrcaWorkerApi
   private readonly runner: GitRunner
-  private readonly settings: SettingsCache
   /** Called after every change, e.g. to repaint the status bar. */
   onChange: (workspaceId: string) => void = () => {}
 
-  constructor(orca: OrcaWorkerApi, runner: GitRunner, settings: SettingsCache) {
+  constructor(orca: OrcaWorkerApi, runner: GitRunner) {
     this.orca = orca
     this.runner = runner
-    this.settings = settings
   }
 
   get(workspaceId: string): JobState | null {
     return this.jobs.get(workspaceId) ?? null
   }
 
-  get testCommand(): string | null {
-    return this.settings.current.testCommand.trim() || null
-  }
-
   /** K11: runs the test command in the workspace itself (after a merge, or on request). */
-  runTests(ws: Resolved, source: string | null): void {
-    const command = this.testCommand
-    if (!command) throw new UserError('Kein Testbefehl eingestellt (Einstellungen → Merge & Review → Testbefehl).')
+  runTests(ws: Resolved, source: string | null, command: string | null): void {
+    if (!command) throw new UserError('Für dieses Projekt ist kein Testbefehl festgelegt (Panel: „Tests für dieses Projekt“).')
     this.start(ws.info.id, { kind: 'tests', source, command, message: `Tests laufen: ${command}` }, async (signal) => {
       const r = await runCommand(command, ws.repo.root, { timeoutMs: JOB_TIMEOUT_MS, signal })
       const ok = r.exitCode === 0
@@ -59,8 +51,7 @@ export class Jobs {
   }
 
   /** K12: merges `source` in a temporary worktree (and tests there); the workspace stays as it is. */
-  probe(ws: Resolved, source: string, withTests: boolean): void {
-    const command = withTests ? this.testCommand : null
+  probe(ws: Resolved, source: string, command: string | null): void {
     const what = command ? 'Probe-Merge mit Tests' : 'Probe-Merge'
     this.start(ws.info.id, { kind: 'probe', source, command, message: `${what} von ${source} läuft …` }, async (signal) => {
       const r = await probeMerge(this.runner, ws.repo.root, source, { testCommand: command, testTimeoutMs: JOB_TIMEOUT_MS, signal })

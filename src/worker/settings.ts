@@ -10,7 +10,6 @@ export interface PluginSettings {
   notifyAgentDone: boolean
   watchSchedule: string
   autoMarkResolved: boolean
-  testCommand: string
 }
 
 export const DEFAULTS: PluginSettings = {
@@ -20,8 +19,7 @@ export const DEFAULTS: PluginSettings = {
   guardAgents: true,
   notifyAgentDone: true,
   watchSchedule: '0 8 * * 1-5',
-  autoMarkResolved: true,
-  testCommand: ''
+  autoMarkResolved: true
 }
 
 /** Kept current from onDidChange, so hooks read settings synchronously within Orca's 2 s budget. */
@@ -47,8 +45,7 @@ export class SettingsCache {
         guardAgents: pick('guardAgents'),
         notifyAgentDone: pick('notifyAgentDone'),
         watchSchedule: pick('watchSchedule'),
-        autoMarkResolved: pick('autoMarkResolved'),
-        testCommand: pick('testCommand')
+        autoMarkResolved: pick('autoMarkResolved')
       }
     } catch (error) {
       orca.log(`settings: ${(error as Error).message}`)

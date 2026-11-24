@@ -63,8 +63,12 @@ export interface RepoState {
   parked: ParkedChanges | null
   /** The plugin's running or last job here (tests, probe merge), until dismissed. */
   job: JobState | null
-  /** Whether a test command is configured (setting `testCommand`). */
-  hasTestCommand: boolean
+  /** The test command of this workspace's project (set in the panel), or null. */
+  testCommand: string | null
+  /** What the plugin would suggest for this project (from package.json, Cargo.toml, …), or null. */
+  suggestedTest: { command: string; because: string } | null
+  /** The Orca project this workspace belongs to, for labels ("Tests für amt-attest-v2"). */
+  projectName: string | null
   /** Why the panel cannot work here, in words for the person; null when it can. */
   problem: string | null
   branch: string | null

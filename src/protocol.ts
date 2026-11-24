@@ -54,6 +54,8 @@ declare module 'orca' {
     'tests.terminal': { input: Ws; output: { terminalId: string } }
     /** K11: starts an agent with the failing output to fix the cause. */
     'tests.fix': { input: Ws; output: AgentDelivery }
+    /** Sets the test command of this workspace's project (all its workspaces); empty removes it. */
+    'project.setTestCommand': { input: Ws & { command: string }; output: { testCommand: string | null } }
     /** Stops the running test or probe. */
     'job.cancel': { input: Ws; output: { ok: true } }
     /** Hides the last job's result. */

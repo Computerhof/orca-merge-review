@@ -7,6 +7,16 @@ oder einer Capability-Erweiterung, die Nutzer neu freigeben müssen.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
+### Geändert (Bruch)
+- **Testbefehl pro Projekt statt global:** Die Einstellung `testCommand` entfällt. Der Testbefehl gehört jetzt zum
+  Orca-Projekt (gilt für alle seine Workspaces) und wird im Panel unter „Tests für <Projekt>“ festgelegt,
+  gespeichert im Plugin-Speicher, nie im Repo. Das Plugin schlägt einen Befehl vor (package.json-Skripte
+  `test`, `test:unit`, `test:ci` mit npm/pnpm/yarn/bun; `cargo test`, `go test ./...`, `deno test`, `pytest`,
+  `dotnet test`, `make test`, Gradle, Maven) und übernimmt ihn erst auf Klick. Request `project.setTestCommand`;
+  `RepoState.testCommand`, `suggestedTest`, `projectName` ersetzen `hasTestCommand`.
+
 ### Hinzugefügt
 - **Änderungen parken und mergen:** Nicht committete Änderungen sperren den Merge nicht mehr stumm. Eine Karte
   nennt die Dateien; der Merge-Knopf parkt sie (git stash), merged und holt sie danach zurück, bei Konflikten nach

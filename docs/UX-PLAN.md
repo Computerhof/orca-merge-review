@@ -133,7 +133,8 @@ Rebase, Cherry-Pick, Stash-Verwaltung, Push/PR, SSH-/Remote-Hosts (Git läuft lo
 Chris hat alle vorgeschlagenen Features gewählt, dazu drei Richtungsentscheidungen:
 **E4** Probe-Merge in einem versteckten Temp-Worktree, den das Plugin selbst anlegt und wieder entfernt
 (kein Orca-Workspace, denn die Plugin-API kann Workspaces nicht entfernen). **E5** Tests laufen im Worker
-(Exit-Code sicher), ein Knopf zeigt sie zusätzlich in einem Orca-Terminal. **E6** Markerfrei gespeicherte
+(Exit-Code sicher), ein Knopf zeigt sie zusätzlich in einem Orca-Terminal. **E8 (2026-11-24, ersetzt die globale Einstellung):** Der Testbefehl gilt pro Orca-Projekt und wird im Panel
+festgelegt; das Plugin schlägt einen vor, übernimmt ihn aber nur auf Klick. **E6** Markerfrei gespeicherte
 Konfliktdateien werden automatisch als gelöst markiert, mit Hinweis; abschaltbar.
 
 | Kreis | Auslöser | Was das Plugin tut | Orca-Mittel |
