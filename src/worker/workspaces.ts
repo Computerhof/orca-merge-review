@@ -10,6 +10,7 @@ type Row = {
   kind: 'worktree' | 'folder'
   name: string
   projectId?: string | null
+  project?: string | null
   path: string
   branch: string | null
   hostId: string | null

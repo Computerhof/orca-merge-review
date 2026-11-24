@@ -11,6 +11,7 @@ import type { SettingsCache } from './settings.ts'
 import { focusAgent } from './circles.ts'
 import type { Jobs } from './jobs.ts'
 import { buildOverview } from './overview.ts'
+import { projectKey, projectTestCommand, suggestTestCommand } from './projectTests.ts'
 import { findWatch, setWatch } from './watch.ts'
 import type { Resolved, Workspaces } from './workspaces.ts'
 
@@ -66,10 +67,11 @@ export function registerHandlers(deps: Deps): void {
           : ''
   }
   /** K11: after a successful merge, the tests run by themselves when a command is set. */
-  const testAfterMerge = (ws: Parameters<Jobs['runTests']>[0], source: string | null) => {
-    if (!jobs.testCommand) return
+  const testAfterMerge = async (ws: Resolved, source: string | null) => {
+    const command = await projectTestCommand(memory, ws)
+    if (!command) return
     try {
-      jobs.runTests(ws, source)
+      jobs.runTests(ws, source, command)
     } catch (error) {
       orca.log(`tests after merge: ${(error as Error).message}`)
     }
@@ -98,7 +100,9 @@ export function registerHandlers(deps: Deps): void {
           lastMerge: null,
           parked: null,
           job: null,
-          hasTestCommand: !!jobs.testCommand
+          testCommand: null,
+          suggestedTest: null,
+          projectName: null
         }
       }
       // One ref listing serves the state, the base guess and the source list.
@@ -127,7 +131,9 @@ export function registerHandlers(deps: Deps): void {
         lastMerge: undoable,
         parked: await memory.parked(ws.info.id).then((p) => (p ? { files: p.files, source: p.source, at: p.at } : null)),
         job: jobs.get(ws.info.id),
-        hasTestCommand: !!jobs.testCommand
+        testCommand: await projectTestCommand(memory, ws),
+        suggestedTest: await suggestTestCommand(ws),
+        projectName: ws.row.project ?? null
       }
     })
   )
@@ -188,7 +194,7 @@ export function registerHandlers(deps: Deps): void {
           outcome = { ...outcome, message: outcome.message + (await restoreParked(ws, true)) }
           if (outcome.status !== 'up-to-date') {
             void orca.host.call('notifications.show', { title: 'Merge & Review', body: outcome.message }).catch(() => {})
-            testAfterMerge(ws, source)
+            await testAfterMerge(ws, source)
           }
         }
         return outcome
@@ -226,7 +232,7 @@ export function registerHandlers(deps: Deps): void {
         }
         const note = await restoreParked(ws, true)
         void orca.host.call('notifications.show', { title: 'Merge & Review', body: `Merge abgeschlossen.${note}` }).catch(() => {})
-        testAfterMerge(ws, p?.source ?? null)
+        await testAfterMerge(ws, p?.source ?? null)
         return { hash }
       },
       touches
@@ -370,7 +376,7 @@ export function registerHandlers(deps: Deps): void {
     guarded(deps, async ({ workspaceId, source, withTests }) => {
       const ws = await workspaces.resolve(workspaceId)
       await ws.repo.verify(source)
-      jobs.probe(ws, source, withTests ?? true)
+      jobs.probe(ws, source, withTests === false ? null : await projectTestCommand(memory, ws))
       return { started: true as const }
     })
   )
@@ -379,7 +385,7 @@ export function registerHandlers(deps: Deps): void {
     'tests.run',
     guarded(deps, async ({ workspaceId }) => {
       const ws = await workspaces.resolve(workspaceId)
-      jobs.runTests(ws, jobs.get(ws.info.id)?.source ?? null)
+      jobs.runTests(ws, jobs.get(ws.info.id)?.source ?? null, await projectTestCommand(memory, ws))
       return { started: true as const }
     })
   )
@@ -388,8 +394,8 @@ export function registerHandlers(deps: Deps): void {
     'tests.terminal',
     guarded(deps, async ({ workspaceId }) => {
       const ws = await workspaces.resolve(workspaceId)
-      const command = jobs.testCommand
-      if (!command) throw new UserError('Kein Testbefehl eingestellt.')
+      const command = await projectTestCommand(memory, ws)
+      if (!command) throw new UserError('Für dieses Projekt ist kein Testbefehl festgelegt.')
       return orca.host.call('terminal.create', { workspaceId: ws.info.id, title: 'Merge & Review: Tests', command })
     })
   )
@@ -409,6 +415,17 @@ export function registerHandlers(deps: Deps): void {
       })
       const launched = await orca.host.call('agent.launch', { workspaceId: ws.info.id, agent: settings.current.agent, prompt })
       return { how: 'launched' as const, terminalId: launched.terminalId }
+    })
+  )
+
+  orca.panels.handle(
+    'project.setTestCommand',
+    guarded(deps, async ({ workspaceId, command }) => {
+      const ws = await workspaces.resolve(workspaceId)
+      const value = command.trim()
+      if (value.length > 500 || /[\r\n\0]/.test(value)) throw new UserError('Der Testbefehl muss eine Zeile sein (höchstens 500 Zeichen).')
+      await memory.setTestCommand(projectKey(ws), value || null)
+      return { testCommand: value || null }
     })
   )
 

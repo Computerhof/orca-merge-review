@@ -236,12 +236,13 @@ test('K11: after a clean merge the configured tests run; red offers an agent fix
   execFileSync('git', ['add', 'more.txt'], { cwd: dir, stdio: 'ignore' })
   execFileSync('git', ['commit', '-q', '-m', 'more'], { cwd: dir, stdio: 'ignore' })
   execFileSync('git', ['checkout', '-q', 'main'], { cwd: dir, stdio: 'ignore' })
-  const host = mockHost({
-    results: hostResults(dir),
-    settings: { testCommand: 'node -e "console.log(1234);process.exit(7)"' }
-  })
+  const host = mockHost({ results: hostResults(dir) })
   const worker = await mountWorker(main, { host, ...manifest })
   try {
+    // The command belongs to the project (all its workspaces), set from the panel.
+    const set = await worker.request('project.setTestCommand', { command: ' node -e "console.log(1234);process.exit(7)" ' })
+    assert.equal(set.testCommand, 'node -e "console.log(1234);process.exit(7)"')
+    assert.equal((await worker.request('repo.state', { workspaceId: 'ws-feature' })).testCommand, set.testCommand, 'same project, same command')
     const out = await worker.request('merge.run', { source: 'more', mode: 'no-ff' })
     assert.equal(out.status, 'merged')
     let st = await worker.request('repo.state', {})

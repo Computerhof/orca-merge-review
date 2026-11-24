@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "merge-review",
   "name": "Merge & Review",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Review branches and agent workspaces before you merge, predict conflicts, merge, resolve conflicts block by block in a wide tab, and hand reviews or conflicts to agents.",
   "license": "MIT",
   "repository": "https://github.com/Computerhof/orca-merge-review",
@@ -161,14 +161,6 @@
         "description": "Blockiert während eines Merges Git-Befehle von Agenten, die ihn zerstören würden (reset --hard, merge --abort, stash, …), und Force-Push immer.",
         "type": "boolean",
         "default": true
-      },
-      {
-        "key": "testCommand",
-        "title": "Testbefehl nach dem Merge",
-        "description": "Läuft nach jedem erfolgreichen Merge im Workspace und beim Probe-Merge im Temp-Worktree, z. B. npm test. Leer = aus.",
-        "type": "string",
-        "default": "",
-        "placeholder": "npm test"
       },
       {
         "key": "autoMarkResolved",

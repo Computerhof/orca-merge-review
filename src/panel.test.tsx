@@ -8,7 +8,9 @@ const base: RepoState = {
   base: 'main',
   job: null,
   parked: null,
-  hasTestCommand: false,
+  testCommand: null,
+  suggestedTest: null,
+  projectName: 'app',
   problem: null,
   branch: 'main',
   head: 'h0',
@@ -103,7 +105,7 @@ test('K11: red tests after a merge show the output and offer an agent fix', asyn
       'repo.state': () => ({
         ...base,
         suggestedSource: '',
-        hasTestCommand: true,
+        testCommand: 'npm test',
         job: {
           kind: 'tests',
           status: 'failed',
@@ -162,6 +164,31 @@ test('uncommitted changes are shown plainly; the merge parks them first', async 
   await view.press({ text: 'Ja, parken und mergen' })
   await view.settled()
   assert.deepEqual(runs[0], { source: 'feature', mode: 'no-ff', park: true })
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('the project test command: a detected suggestion is offered, never saved by itself', async () => {
+  const saved: unknown[] = []
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => ({ ...base, suggestedSource: '', suggestedTest: { command: 'pnpm test', because: 'package.json hat ein test-Skript' } }),
+      'watch.get': () => ({ watch: null }),
+      'overview.list': () => ({ base: 'main', rows: [] }),
+      'project.setTestCommand': (input) => {
+        saved.push(input)
+        return { testCommand: 'pnpm test' }
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+  assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /Tests für app: keine/)
+  assert.equal(saved.length, 0)
+  await view.press({ text: 'Vorschlag übernehmen: pnpm test' })
+  await view.settled()
+  assert.deepEqual(saved[0], { command: 'pnpm test' })
   assert.deepEqual(view.refusals, [])
   await view.unmount()
 })

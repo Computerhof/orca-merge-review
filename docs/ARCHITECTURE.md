@@ -15,6 +15,7 @@ src/
     prompts.ts          Texte für Agenten (Review-Anmerkung, Konfliktauftrag, Merge-Wächter, Merge-Hinweis)
     reviewExport.ts     Review als Markdown (Vergleich, Commits, Dateien, Notizen)
     readiness.ts        K10: Wie bereit ist ein Workspace? (Sortierung, Beschriftung)
+    testDetect.ts       Testbefehl aus den Projektdateien vorschlagen (nur Vorschlag)
   run/                  ── kennt Orca nicht; läuft in CI ──
     command.ts          Testbefehl ausführen: Exit-Code, letzte Zeilen, Zeitlimit, Abbruch (ganzer Prozessbaum)
     probe.ts            Probe-Merge im Temp-Worktree (+ Tests), räumt immer auf
@@ -33,6 +34,7 @@ src/
     circles.ts          K13 Speichern = gelöst, K14 Merge-Hinweis im Prompt, K15 Zum Agenten
     overview.ts         K10: alle Workspaces des Projekts gegen die Base (gecacht pro Commit-Paar)
     jobs.ts             K11/K12: Tests und Probe-Merge als Hintergrund-Job pro Workspace (job.changed)
+    projectTests.ts     Testbefehl pro Orca-Projekt (Plugin-Speicher) und Vorschlag
     memory.ts           Plugin-Speicher: letzte Quelle, Undo-Daten, beobachtete Quellen
     settings.ts         Einstellungen, synchron lesbar
   panel.tsx             Seitenleiste (Orca-Komponenten), Modi A/B/C
