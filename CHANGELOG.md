@@ -8,6 +8,9 @@ oder einer Capability-Erweiterung, die Nutzer neu freigeben müssen.
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Workspaces des Projekts (Merge-Übersicht):** Auf dem Base-Workspace zeigt das Panel alle Workspaces des
+  Projekts mit Agent-Status, Commits vor/hinter der Base und Vorhersage; bereite zuerst. Enter oder Doppelklick
+  vergleicht. Ergebnisse sind pro Commit-Paar gecacht. Request `overview.list`, `RepoState.base`.
 - **Speichern = gelöst:** Eine Konfliktdatei, die im Orca-Editor ohne Marker gespeichert wird, wird automatisch
   als gelöst markiert (`git add`), mit Hinweis im Panel. Einstellung `autoMarkResolved` (Standard: an).
 - **Merge-Hinweis an Agenten:** Prompts an einen Agenten in einem Workspace mit laufendem Merge bekommen einen

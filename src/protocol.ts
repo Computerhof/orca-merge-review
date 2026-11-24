@@ -8,6 +8,7 @@ import type {
   MergeMode,
   MergeOutcome,
   MergeWatch,
+  Overview,
   RepoState,
   ReviewView
 } from './types.ts'
@@ -37,6 +38,8 @@ declare module 'orca' {
     'merge.commit': { input: Ws & { message?: string }; output: { hash: string } }
     /** Undoes the last merge this plugin made here, if nothing happened since. */
     'merge.undo': { input: Ws; output: { ok: true } }
+    /** K10: every workspace of the project, seen from this (base) workspace: agent, ahead/behind, prediction. */
+    'overview.list': { input: Ws; output: Overview }
     /** Focuses the terminal of the agent working on `source` (a workspace of this project), else opens that workspace. */
     'agent.focus': { input: Ws & { source: string }; output: { how: 'terminal' | 'workspace' } }
     /** The conflict blocks of one unmerged file. */

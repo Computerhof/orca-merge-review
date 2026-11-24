@@ -5,6 +5,7 @@ import type { Comparison, RepoState } from './types'
 
 const base: RepoState = {
   workspace: { id: 'ws', name: 'main', path: '/x', supported: true, hostId: 'local' },
+  base: 'main',
   problem: null,
   branch: 'main',
   head: 'h0',
@@ -58,6 +59,36 @@ test('compare mode: prediction, warning about a working agent, merge needs a sec
   assert.deepEqual(runs[0], { source: 'feature', mode: 'no-ff' })
   assert.deepEqual(view.refusals, [])
   assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('K10: on the base workspace the panel lists the project workspaces; a row compares', async () => {
+  const compared: unknown[] = []
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => ({ ...base, suggestedSource: '' }),
+      'repo.compare': (input) => {
+        compared.push(input)
+        return comparison
+      },
+      'watch.get': () => ({ watch: null }),
+      'overview.list': () => ({
+        base: 'main',
+        rows: [
+          { workspaceId: 'ws-a', name: 'agent-a', branch: 'feature', agent: 'done', ahead: 2, behind: 0, preview: { clean: true, conflicts: [], upToDate: false, fastForward: true } },
+          { workspaceId: 'ws-b', name: 'agent-b', branch: 'agent-b', agent: 'working', ahead: 1, behind: 3, preview: { clean: false, conflicts: ['x.ts'], upToDate: false, fastForward: false } }
+        ]
+      })
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+  const text = view.summary().join('\n') + JSON.stringify(view.tree())
+  assert.match(text, /Workspaces des Projekts · 1 bereit · 1 mit Konflikten/)
+  assert.match(text, /✓ Fast-forward/)
+  assert.match(text, /⚠ 1 Konflikt-Datei\(en\)/)
+  assert.deepEqual(view.refusals, [])
   await view.unmount()
 })
 

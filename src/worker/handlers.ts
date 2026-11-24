@@ -9,6 +9,7 @@ import type { Monitor } from './monitor.ts'
 import { openReviewTab } from './reviewTab.ts'
 import type { SettingsCache } from './settings.ts'
 import { focusAgent } from './circles.ts'
+import { buildOverview } from './overview.ts'
 import { findWatch, setWatch } from './watch.ts'
 import type { Workspaces } from './workspaces.ts'
 
@@ -54,6 +55,7 @@ export function registerHandlers(deps: Deps): void {
         if (!(error instanceof UserError)) throw error
         return {
           workspace: null,
+          base: null,
           problem: error.message,
           branch: null,
           head: null,
@@ -82,7 +84,7 @@ export function registerHandlers(deps: Deps): void {
       const suggested =
         (lastSource && sources.some((s) => s.ref === lastSource) ? lastSource : null) ??
         (base && base !== core.branch ? base : sources[0]?.ref ?? null)
-      return { ...core, workspace: ws.info, sources, suggestedSource: suggested, lastMerge: undoable }
+      return { ...core, workspace: ws.info, base, sources, suggestedSource: suggested, lastMerge: undoable }
     })
   )
 
@@ -265,6 +267,11 @@ export function registerHandlers(deps: Deps): void {
       })
       return { how: 'launched' as const, terminalId: launched.terminalId }
     })
+  )
+
+  orca.panels.handle(
+    'overview.list',
+    guarded(deps, async ({ workspaceId }) => buildOverview(workspaces, await workspaces.resolve(workspaceId)))
   )
 
   orca.panels.handle(
