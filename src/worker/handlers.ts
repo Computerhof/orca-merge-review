@@ -22,7 +22,9 @@ export interface Deps {
 
 /** Wraps a handler so a UserError reaches the panel with its message, and the repo gets re-read. */
 function guarded<I extends { workspaceId?: string }, O>(deps: Deps, fn: (input: I) => Promise<O>, refresh = false) {
-  return async (input: I): Promise<O> => {
+  // `plugin.request(name)` without input arrives as null.
+  return async (raw: I | null | undefined): Promise<O> => {
+    const input = (raw ?? {}) as I
     try {
       return await fn(input)
     } catch (error) {
@@ -53,6 +55,7 @@ export function registerHandlers(deps: Deps): void {
           workspace: null,
           problem: error.message,
           branch: null,
+          head: null,
           branches: [],
           dirtyFiles: [],
           merge: null,
@@ -61,15 +64,17 @@ export function registerHandlers(deps: Deps): void {
           lastMerge: null
         }
       }
+      // One ref listing serves the state, the base guess and the source list.
+      const refs = await ws.repo.refs()
       const [core, base, lastSource, lastMerge] = await Promise.all([
-        ws.repo.state(),
-        ws.repo.baseBranch(),
+        ws.repo.state(refs),
+        ws.repo.baseBranch(refs),
         memory.lastSource(ws.info.id),
         memory.lastMerge(ws.info.id)
       ])
-      const sources = await workspaces.sources(ws, base)
+      const sources = await workspaces.sources(ws, base, refs)
       let undoable = lastMerge
-      if (undoable && (core.merge || (await ws.repo.head()) !== undoable.after)) {
+      if (undoable && (core.merge || core.head !== undoable.after)) {
         undoable = null
         await memory.setLastMerge(ws.info.id, null)
       }
@@ -94,8 +99,8 @@ export function registerHandlers(deps: Deps): void {
 
   orca.panels.handle(
     'repo.fileDiff',
-    guarded(deps, async ({ workspaceId, source, path }) =>
-      (await workspaces.resolve(workspaceId)).repo.fileDiff(source, path)
+    guarded(deps, async ({ workspaceId, source, path, from }) =>
+      (await workspaces.resolve(workspaceId)).repo.fileDiff(source, path, 'HEAD', from)
     )
   )
 
@@ -106,7 +111,8 @@ export function registerHandlers(deps: Deps): void {
       async ({ workspaceId, source, mode, message }) => {
         const ws = await workspaces.resolve(workspaceId)
         const before = await ws.repo.head()
-        const commits = (await ws.repo.compare(source)).incoming.length
+        await ws.repo.verify(source)
+        const { ahead: commits } = await ws.repo.aheadBehind('HEAD', source)
         const outcome = await ws.repo.merge(source, mode, message, { showBase: settings.current.showBase })
         if (outcome.status === 'conflicts') {
           await memory.setPending(ws.info.id, { source, before, commits })
@@ -179,8 +185,8 @@ export function registerHandlers(deps: Deps): void {
     'conflict.resolveHunk',
     guarded(
       deps,
-      async ({ workspaceId, path, index, choice }) =>
-        (await workspaces.resolve(workspaceId)).repo.resolveHunk(path, index, choice),
+      async ({ workspaceId, path, index, choice, expect }) =>
+        (await workspaces.resolve(workspaceId)).repo.resolveHunk(path, index, choice, expect),
       touches
     )
   )
@@ -246,11 +252,11 @@ export function registerHandlers(deps: Deps): void {
     'agent.resolveConflicts',
     guarded(deps, async ({ workspaceId }) => {
       const ws = await workspaces.resolve(workspaceId)
-      const st = await ws.repo.state()
-      if (!st.merge) throw new UserError('Es läuft kein Merge.')
-      const open = st.merge.conflicts.filter((f) => !st.merge!.markerFree.includes(f))
+      const [merge, branch] = await Promise.all([ws.repo.mergeSummary(), ws.repo.currentBranch()])
+      if (!merge) throw new UserError('Es läuft kein Merge.')
+      const open = merge.conflicts.filter((f) => !merge.markerFree.includes(f))
       if (!open.length) throw new UserError('Alle Konflikte sind schon aufgelöst.')
-      const prompt = resolveConflictsPrompt({ target: st.branch ?? ws.info.name, source: st.merge.source, files: open })
+      const prompt = resolveConflictsPrompt({ target: branch ?? ws.info.name, source: merge.source, files: open })
       const launched = await orca.host.call('agent.launch', {
         workspaceId: ws.info.id,
         agent: settings.current.agent,

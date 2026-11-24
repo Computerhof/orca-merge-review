@@ -25,7 +25,8 @@ declare module 'orca' {
     'repo.compare': { input: Ws & { source: string }; output: Comparison }
     /** The patch of one file as the merge would bring it in (merge-base...source). */
     'repo.fileDiff': {
-      input: Ws & { source: string; path: string }
+      /** `from`: the old path of a renamed file, so the patch pairs both instead of showing a new file. */
+      input: Ws & { source: string; path: string; from?: string }
       output: { patch: string; truncated: boolean }
     }
     /** Merges `source` into the current branch. Refuses on a dirty tree or an ongoing merge. */
@@ -38,9 +39,10 @@ declare module 'orca' {
     'merge.undo': { input: Ws; output: { ok: true } }
     /** The conflict blocks of one unmerged file. */
     'conflict.get': { input: Ws & { path: string }; output: ConflictFile }
-    /** Replaces one conflict block with a side, writes the file, answers the file again. */
+    /** Replaces one conflict block with a side, writes the file, answers the file again. With
+     *  `expect` (the block's sides as shown) it refuses when the block changed in the meantime. */
     'conflict.resolveHunk': {
-      input: Ws & { path: string; index: number; choice: ConflictChoice }
+      input: Ws & { path: string; index: number; choice: ConflictChoice; expect?: { ours: string; theirs: string } }
       output: ConflictFile
     }
     /** Takes the whole file from one side and stages it. */

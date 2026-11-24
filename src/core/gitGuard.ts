@@ -1,5 +1,10 @@
 // Reads an agent's tool call and decides whether it touches Git, and whether it would destroy an
 // ongoing merge. Pure and synchronous: Orca gives a hook 2 s, so the decision never waits on Git.
+//
+// The command is split like a shell would (quotes, escapes, `;` `&&` `||` `|` `&`, newlines,
+// parentheses), so text inside quotes ("git rebase" in a commit message) is never read as a
+// command, while `git -C . reset --hard`, `/usr/bin/git`, `git.exe` and `bash -c "…"` are.
+// A guard rail, not a security boundary: a determined process can still get around it.
 
 /** The command text of a shell-like tool call, whatever shape the agent uses; null otherwise. */
 export function commandOf(input: unknown): string | null {
@@ -9,35 +14,175 @@ export function commandOf(input: unknown): string | null {
   for (const key of ['command', 'cmd', 'script', 'commandLine']) {
     const v = o[key]
     if (typeof v === 'string') return v
-    if (Array.isArray(v) && v.every((x) => typeof x === 'string')) return v.join(' ')
+    if (Array.isArray(v) && v.every((x) => typeof x === 'string')) return v.map(quoteArg).join(' ')
   }
   return null
 }
 
-/** True when the command runs git at all (any position in a pipeline or chain). */
+function quoteArg(a: string): string {
+  return /[\s"'\\;&|()]/.test(a) ? `'${a.replace(/'/g, `'\\''`)}'` : a
+}
+
+/** One `git …` call found in a command: its subcommand and the arguments after it. */
+export interface GitCall {
+  sub: string
+  args: string[]
+}
+
+const SEPARATORS = new Set([';', '&&', '||', '|', '&', '\n', '(', ')'])
+
+/** Shell-like split into simple commands (token lists). Quotes are removed, their text kept as one token. */
+export function splitCommands(command: string): string[][] {
+  const out: string[][] = []
+  let cur: string[] = []
+  let tok = ''
+  let has = false
+  const endTok = () => {
+    if (has) cur.push(tok)
+    tok = ''
+    has = false
+  }
+  const endCmd = () => {
+    endTok()
+    if (cur.length) out.push(cur)
+    cur = []
+  }
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]
+    if (c === "'") {
+      const j = command.indexOf("'", i + 1)
+      tok += j < 0 ? command.slice(i + 1) : command.slice(i + 1, j)
+      has = true
+      i = j < 0 ? command.length : j
+    } else if (c === '"') {
+      let j = i + 1
+      for (; j < command.length && command[j] !== '"'; j++) {
+        // Inside double quotes a backslash escapes only $ ` " and \ (POSIX); Windows paths stay intact.
+        if (command[j] === '\\' && '$`"\\'.includes(command[j + 1] ?? '')) j++
+        tok += command[j]
+      }
+      has = true
+      i = j
+    } else if (c === '\\' && i + 1 < command.length && command[i + 1] !== '\n') {
+      tok += command[++i]
+      has = true
+    } else if (c === '`' || c === '$' && command[i + 1] === '(') {
+      endCmd() // a command substitution starts a command of its own
+      if (c === '$') i++
+    } else if (c === ' ' || c === '\t' || c === '\r') {
+      endTok()
+    } else {
+      const two = command.slice(i, i + 2)
+      if (two === '&&' || two === '||') {
+        endCmd()
+        i++
+      } else if (SEPARATORS.has(c)) {
+        endCmd()
+      } else {
+        tok += c
+        has = true
+      }
+    }
+  }
+  endCmd()
+  return out
+}
+
+const WRAPPERS = new Set(['sudo', 'command', 'env', 'time', 'nohup', 'exec', 'xargs', 'nice'])
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'fish', 'pwsh', 'powershell', 'cmd'])
+/** Git's global options that take the next token as their value. */
+const GLOBAL_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
+
+function baseName(token: string): string {
+  const name = token.split(/[\\/]/).pop() ?? token
+  return name.toLowerCase().replace(/\.(exe|cmd|bat)$/, '')
+}
+
+/** Every git call in the command, including those inside `bash -c "…"`. */
+export function gitCalls(command: string, depth = 0): GitCall[] {
+  const calls: GitCall[] = []
+  for (const tokens of splitCommands(command)) {
+    let i = 0
+    // Skip VAR=value prefixes and wrappers such as sudo/env.
+    while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || WRAPPERS.has(baseName(tokens[i])))) i++
+    if (i >= tokens.length) continue
+    const prog = baseName(tokens[i])
+    if (SHELLS.has(prog) && depth < 3) {
+      const flag = tokens.findIndex((t, k) => k > i && /^(-c|-command|\/c)$/i.test(t))
+      if (flag > 0 && tokens[flag + 1] !== undefined) calls.push(...gitCalls(tokens.slice(flag + 1).join(' '), depth + 1))
+      continue
+    }
+    if (prog !== 'git') continue
+    i++
+    while (i < tokens.length && tokens[i].startsWith('-')) {
+      if (GLOBAL_WITH_VALUE.has(tokens[i])) i++
+      i++
+    }
+    if (i < tokens.length) calls.push({ sub: tokens[i], args: tokens.slice(i + 1) })
+  }
+  return calls
+}
+
+/** True when the command runs git at all (any position in a pipeline, chain or `bash -c`). */
 export function runsGit(command: string): boolean {
-  return /(^|[\s;&|(`])git(\.exe)?\s/.test(command)
+  return gitCalls(command).length > 0
 }
 
-interface Rule {
-  pattern: RegExp
-  why: string
+/** Short flags may be bundled: `-fd` holds `f`. */
+function hasFlag(args: readonly string[], long: string[], short?: string): boolean {
+  return args.some(
+    (a) => long.includes(a) || long.some((l) => a.startsWith(l + '=')) || (!!short && /^-[a-zA-Z]+$/.test(a) && a.includes(short))
+  )
 }
 
-const DESTRUCTIVE_DURING_MERGE: Rule[] = [
-  { pattern: /\bgit\s+reset\b[^;&|]*--hard\b/, why: 'git reset --hard verwirft den Merge und alle Auflösungen' },
-  { pattern: /\bgit\s+merge\s+--abort\b/, why: 'git merge --abort bricht den Merge ab' },
-  { pattern: /\bgit\s+reset\s+--merge\b/, why: 'git reset --merge bricht den Merge ab' },
-  { pattern: /\bgit\s+(checkout|restore)\b[^;&|]*\s(--\s+)?\.(\s|$)/, why: 'Zurücksetzen des ganzen Arbeitsbaums verwirft Auflösungen' },
-  { pattern: /\bgit\s+clean\b[^;&|]*-[a-zA-Z]*f/, why: 'git clean -f löscht Dateien' },
-  { pattern: /\bgit\s+stash\b(?!\s+(list|show))/, why: 'git stash während eines Merges verliert den Merge-Zustand' },
-  { pattern: /\bgit\s+(checkout|switch)\s+(?!--)(-[bBc]\s+)?[^\s.-][^\s;&|]*\s*($|[;&|])/, why: 'Branch-Wechsel mitten im Merge' },
-  { pattern: /\bgit\s+rebase\b/, why: 'Rebase mitten im Merge' }
-]
+const WHOLE_TREE = new Set(['.', './', ':/', ':/.', ':(top)', '*', ':(top).'])
+const RESOLVING = ['--ours', '--theirs', '--merge', '-m', '--conflict']
 
-const ALWAYS_DESTRUCTIVE: Rule[] = [
-  { pattern: /\bgit\s+push\b[^;&|]*(--force(?!-with-lease)|\s-f\b)/, why: 'Force-Push überschreibt fremde Arbeit' }
-]
+function duringMerge({ sub, args }: GitCall): string | null {
+  const options = args.filter((a) => a.startsWith('-'))
+  const sep = args.indexOf('--')
+  const plain = (sep >= 0 ? args.slice(0, sep) : args).filter((a) => !a.startsWith('-'))
+  const paths = sep >= 0 ? args.slice(sep + 1) : plain
+  if (args.includes('--help') || args.includes('-h')) return null
+  switch (sub) {
+    case 'reset':
+      if (hasFlag(args, ['--hard'])) return 'git reset --hard verwirft den Merge und alle Auflösungen'
+      if (hasFlag(args, ['--merge', '--keep'])) return 'git reset --merge bricht den Merge ab'
+      return null
+    case 'merge':
+      if (hasFlag(args, ['--abort', '--quit'])) return 'git merge --abort bricht den Merge ab'
+      return null
+    case 'checkout':
+      if (hasFlag(args, ['--force'], 'f')) return 'git checkout --force verwirft Auflösungen'
+      if (paths.some((p) => WHOLE_TREE.has(p))) return 'Zurücksetzen des ganzen Arbeitsbaums verwirft Auflösungen'
+      if (hasFlag(args, ['-b', '-B', '--orphan', '--detach'])) return 'Branch-Wechsel mitten im Merge'
+      if (sep < 0 && plain.length === 1 && !options.some((o) => RESOLVING.includes(o))) return 'Branch-Wechsel mitten im Merge'
+      return null
+    case 'restore':
+      if (paths.some((p) => WHOLE_TREE.has(p))) return 'Zurücksetzen des ganzen Arbeitsbaums verwirft Auflösungen'
+      return null
+    case 'switch':
+      return 'Branch-Wechsel mitten im Merge'
+    case 'clean':
+      if (hasFlag(args, ['--force'], 'f')) return 'git clean -f löscht Dateien'
+      return null
+    case 'stash':
+      if (plain[0] === 'list' || plain[0] === 'show') return null
+      return 'git stash während eines Merges verliert den Merge-Zustand'
+    case 'rebase':
+      return 'Rebase mitten im Merge'
+    default:
+      return null
+  }
+}
+
+function always({ sub, args }: GitCall): string | null {
+  if (sub !== 'push') return null
+  const lease = hasFlag(args, ['--force-with-lease'])
+  const force = hasFlag(args, ['--force'], 'f') || args.some((a) => !a.startsWith('-') && a.startsWith('+'))
+  if (force && (!lease || hasFlag(args, ['--force']))) return 'Force-Push überschreibt fremde Arbeit'
+  return null
+}
 
 export interface GuardContext {
   /** A merge is in progress in the agent's workspace. */
@@ -46,11 +191,10 @@ export interface GuardContext {
 
 /** Null when the call may run; otherwise the reason it is refused, for the agent to read. */
 export function guardDecision(command: string, ctx: GuardContext): string | null {
-  if (!runsGit(command)) return null
-  const rules = ctx.merging ? [...DESTRUCTIVE_DURING_MERGE, ...ALWAYS_DESTRUCTIVE] : ALWAYS_DESTRUCTIVE
-  for (const rule of rules) {
-    if (rule.pattern.test(command)) {
-      return `Merge & Review hat diesen Befehl blockiert: ${rule.why}.${
+  for (const call of gitCalls(command)) {
+    const why = always(call) ?? (ctx.merging ? duringMerge(call) : null)
+    if (why) {
+      return `Merge & Review hat diesen Befehl blockiert: ${why}.${
         ctx.merging ? ' Es läuft ein Merge; der Mensch schließt ihn im Merge-&-Review-Panel ab oder bricht ihn dort ab.' : ''
       }`
     }

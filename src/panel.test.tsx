@@ -7,6 +7,7 @@ const base: RepoState = {
   workspace: { id: 'ws', name: 'main', path: '/x', supported: true, hostId: 'local' },
   problem: null,
   branch: 'main',
+  head: 'h0',
   branches: ['main', 'feature'],
   dirtyFiles: [],
   merge: null,
@@ -22,6 +23,7 @@ const comparison: Comparison = {
   target: 'HEAD',
   mergeBase: 'abc',
   incoming: [{ hash: 'h1', short: 'h1', subject: 'feature: zwei', author: 'T', at: 0 }],
+  ahead: 1,
   behind: 1,
   files: [{ path: 'a.txt', status: 'M', added: 1, deleted: 1 }],
   preview: { clean: false, conflicts: ['a.txt'], upToDate: false, fastForward: false }

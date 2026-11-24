@@ -26,6 +26,7 @@ const LIST_TTL_MS = 3000
 
 export class Workspaces {
   private cache: { at: number; rows: Row[] } | null = null
+  private readonly aliases = new Map<string, string>()
   private readonly orca: OrcaWorkerApi
   private readonly runner: GitRunner
 
@@ -40,6 +41,38 @@ export class Workspaces {
     const rows = answer.workspaces as Row[]
     this.cache = { at: Date.now(), rows }
     return rows
+  }
+
+  /**
+   * Hooks name a workspace by Orca's own id, which need not be the `workspace.list` id the rest of
+   * the plugin keys on (e.g. `repoId::path`, or the identity key without its `identity:` prefix).
+   * Synchronous for hooks: maps it with the last listing; unknown ids come back unchanged.
+   */
+  canonical(id: string | null | undefined): string | null {
+    if (!id) return null
+    const rows = this.cache?.rows
+    if (!rows) {
+      void this.list().catch(() => {})
+      return id
+    }
+    if (rows.some((w) => w.id === id)) return id
+    const known = this.aliases.get(id)
+    if (known) return known
+    const sep = id.lastIndexOf('::')
+    const path = samePath(sep >= 0 ? id.slice(sep + 2) : id)
+    const row = rows.find((w) => w.id === `identity:${id}` || samePath(w.path) === path)
+    if (!row) return id
+    this.aliases.set(id, row.id)
+    this.orca.log(`workspace id ${id} → ${row.id}`)
+    return row.id
+  }
+
+  /** Synchronous: the local working-tree path of a (canonical) workspace id, if known. */
+  pathOf(id: string): string | null {
+    const row = this.cache?.rows.find((w) => w.id === id)
+    if (row) return row.hostId === 'local' || row.hostId === null ? row.path : null
+    const sep = id.lastIndexOf('::')
+    return sep >= 0 ? id.slice(sep + 2) : null
   }
 
   async focusedId(): Promise<string | null> {
@@ -65,7 +98,11 @@ export class Workspaces {
   }
 
   /** Workspaces of the same project first (with agent status), then other local and remote branches. */
-  async sources(current: Resolved, base: string | null): Promise<SourceOption[]> {
+  async sources(
+    current: Resolved,
+    base: string | null,
+    known?: { local: string[]; remote: string[] }
+  ): Promise<SourceOption[]> {
     const rows = await this.list()
     const branch = current.row.branch
     const seen = new Set<string>(branch ? [branch] : [])
@@ -90,7 +127,7 @@ export class Workspaces {
         isBase: w.branch === base
       })
     }
-    const { local, remote } = await current.repo.refs()
+    const { local, remote } = known ?? (await current.repo.refs())
     for (const ref of local) {
       if (seen.has(ref)) continue
       seen.add(ref)
@@ -111,4 +148,10 @@ export class Workspaces {
       (w) => w.branch === ref && w.kind === 'worktree' && w.projectId === current.row.projectId && w.id !== current.row.id
     )
   }
+}
+
+/** Paths as Orca and Git print them, compared case-insensitively where the file system is. */
+function samePath(p: string): string {
+  const s = p.replace(/\\/g, '/').replace(/\/+$/, '')
+  return process.platform === 'win32' || process.platform === 'darwin' ? s.toLowerCase() : s
 }

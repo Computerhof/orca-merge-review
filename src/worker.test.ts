@@ -46,6 +46,10 @@ test('compare, merge with conflicts, resolve in the tab, finish, undo', async ()
     assert.equal(deny.kind, 'deny')
     const pass = await worker.hooks.fire('agent.tool.before', { agent: 'claude', workspaceId: 'ws-main', tool: 'Bash', input: { command: 'git add a.txt' } })
     assert.equal(pass.kind, 'continue')
+    // Real hooks name the workspace `repoId::path` (seen in Orca 1.4.271), not by its list id.
+    const legacyId = `repo-1::${dir.replace(/\\/g, '/')}`
+    const denyLegacy = await worker.hooks.fire('agent.tool.before', { agent: 'claude', workspaceId: legacyId, tool: 'Bash', input: { command: 'git merge --abort' } })
+    assert.equal(denyLegacy.kind, 'deny')
 
     await worker.request('conflict.resolveHunk', { path: 'a.txt', index: 0, choice: 'theirs' })
     await worker.request('conflict.markResolved', { path: 'a.txt' })
