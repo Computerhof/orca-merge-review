@@ -438,6 +438,34 @@ export class Repo {
     return (await this.git(['rev-parse', 'HEAD'])).stdout.trim()
   }
 
+  // ---------------------------------------------------------------- park (stash)
+
+  /** Parks the tracked changes in the stash (untracked files stay); returns the stash commit and its files. */
+  async park(message: string): Promise<{ sha: string; files: string[] }> {
+    const files = await this.dirtyFiles(true)
+    if (!files.length) throw new UserError('Es gibt keine Änderungen zu parken.')
+    await this.git(['stash', 'push', '--message', message])
+    const sha = (await this.git(['rev-parse', '-q', '--verify', 'refs/stash'])).stdout.trim()
+    return { sha, files }
+  }
+
+  /**
+   * Brings parked changes back with `git stash pop`. With `since` (HEAD before the merge) it does
+   * nothing when the merge changed one of the parked files, so a person decides instead of Git
+   * writing conflict markers into their own work. A pop that conflicts keeps the stash entry.
+   */
+  async unpark(sha: string, files: readonly string[], since?: string): Promise<'restored' | 'overlap' | 'missing' | 'conflict'> {
+    const list = await this.git(['stash', 'list', '--format=%H'])
+    const index = list.stdout.split('\n').map((s) => s.trim()).indexOf(sha)
+    if (index < 0) return 'missing'
+    if (since) {
+      const changed = (await this.git(['diff', '--name-only', '-z', since, 'HEAD'])).stdout.split('\0')
+      if (changed.some((f) => f && files.includes(f))) return 'overlap'
+    }
+    const r = await this.git(['stash', 'pop', '--quiet', `stash@{${index}}`], [0, 1])
+    return r.code === 0 ? 'restored' : 'conflict'
+  }
+
   // ---------------------------------------------------------------- conflicts
 
   private async requireUnmerged(path: string): Promise<string> {

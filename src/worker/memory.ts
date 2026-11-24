@@ -9,6 +9,15 @@ export interface PendingMerge {
   commits: number
 }
 
+/** Changes parked in the stash for a merge: the stash commit, its files, and HEAD before the merge. */
+export interface Parked {
+  sha: string
+  files: string[]
+  source: string
+  before: string
+  at: number
+}
+
 /** A source workspace someone compared against: its agent finishing makes the comparison stale. */
 export interface Watched {
   targetWorkspaceId: string
@@ -19,6 +28,7 @@ const key = {
   lastSource: (ws: string) => `lastSource:${ws}`,
   lastMerge: (ws: string) => `lastMerge:${ws}`,
   pending: (ws: string) => `pendingMerge:${ws}`,
+  parked: (ws: string) => `parked:${ws}`,
   watched: 'watchedSources'
 }
 
@@ -47,6 +57,9 @@ export class Memory {
   pending = (ws: string) => this.get<PendingMerge>(key.pending(ws))
   setPending = (ws: string, p: PendingMerge | null) => this.put(key.pending(ws), p)
 
+  parked = (ws: string) => this.get<Parked>(key.parked(ws))
+  setParked = (ws: string, p: Parked | null) => this.put(key.parked(ws), p)
+
   async watched(): Promise<Record<string, Watched>> {
     return (await this.get<Record<string, Watched>>(key.watched)) ?? {}
   }
@@ -59,7 +72,7 @@ export class Memory {
 
   /** Drops everything about a workspace Orca removed. */
   async forget(ws: string): Promise<void> {
-    for (const k of [key.lastSource(ws), key.lastMerge(ws), key.pending(ws)]) await this.put(k, null)
+    for (const k of [key.lastSource(ws), key.lastMerge(ws), key.pending(ws), key.parked(ws)]) await this.put(k, null)
     const all = await this.watched()
     let changed = false
     for (const [src, w] of Object.entries(all)) {

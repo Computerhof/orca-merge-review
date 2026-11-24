@@ -12,7 +12,7 @@ import { focusAgent } from './circles.ts'
 import type { Jobs } from './jobs.ts'
 import { buildOverview } from './overview.ts'
 import { findWatch, setWatch } from './watch.ts'
-import type { Workspaces } from './workspaces.ts'
+import type { Resolved, Workspaces } from './workspaces.ts'
 
 export interface Deps {
   orca: OrcaWorkerApi
@@ -33,6 +33,7 @@ function guarded<I extends { workspaceId?: string }, O>(deps: Deps, fn: (input: 
       return await fn(input)
     } catch (error) {
       if (error instanceof UserError) {
+        deps.orca.log(`refused: ${error.message}`)
         throw Object.assign(new Error(error.message), { code: 'action_failed' })
       }
       deps.orca.log(`request failed: ${(error as Error).stack ?? error}`)
@@ -45,6 +46,25 @@ function guarded<I extends { workspaceId?: string }, O>(deps: Deps, fn: (input: 
 
 export function registerHandlers(deps: Deps): void {
   const { orca, workspaces, memory, monitor, settings, pending, jobs } = deps
+
+  /**
+   * Brings changes parked for a merge back. `careful`: not when the merge changed the same files
+   * (then they stay parked and the panel offers "Zurückholen").
+   */
+  const restoreParked = async (ws: Resolved, careful: boolean): Promise<string> => {
+    const p = await memory.parked(ws.info.id)
+    if (!p) return ''
+    const r = await ws.repo.unpark(p.sha, p.files, careful ? p.before : undefined)
+    if (r === 'restored' || r === 'missing') await memory.setParked(ws.info.id, null)
+    orca.log(`parked changes: ${r}`)
+    return r === 'restored'
+      ? ' Deine geparkten Änderungen sind zurück.'
+      : r === 'overlap'
+        ? ' Deine geparkten Änderungen liegen noch im Stash, weil der Merge dieselben Dateien geändert hat (Panel: „Zurückholen“).'
+        : r === 'conflict'
+          ? ' Beim Zurückholen deiner geparkten Änderungen gab es Konflikte; sie liegen weiter im Stash.'
+          : ''
+  }
   /** K11: after a successful merge, the tests run by themselves when a command is set. */
   const testAfterMerge = (ws: Parameters<Jobs['runTests']>[0], source: string | null) => {
     if (!jobs.testCommand) return
@@ -76,6 +96,7 @@ export function registerHandlers(deps: Deps): void {
           sources: [],
           suggestedSource: null,
           lastMerge: null,
+          parked: null,
           job: null,
           hasTestCommand: !!jobs.testCommand
         }
@@ -104,6 +125,7 @@ export function registerHandlers(deps: Deps): void {
         sources,
         suggestedSource: suggested,
         lastMerge: undoable,
+        parked: await memory.parked(ws.info.id).then((p) => (p ? { files: p.files, source: p.source, at: p.at } : null)),
         job: jobs.get(ws.info.id),
         hasTestCommand: !!jobs.testCommand
       }
@@ -133,19 +155,41 @@ export function registerHandlers(deps: Deps): void {
     'merge.run',
     guarded(
       deps,
-      async ({ workspaceId, source, mode, message }) => {
+      async ({ workspaceId, source, mode, message, park }) => {
         const ws = await workspaces.resolve(workspaceId)
         const before = await ws.repo.head()
         await ws.repo.verify(source)
         const { ahead: commits } = await ws.repo.aheadBehind('HEAD', source)
-        const outcome = await ws.repo.merge(source, mode, message, { showBase: settings.current.showBase })
+        if (park && (await ws.repo.dirtyFiles(true)).length) {
+          if (await ws.repo.mergeSummary()) throw new UserError('Es läuft schon ein Merge. Erst abschließen oder abbrechen.')
+          if (await memory.parked(ws.info.id)) {
+            throw new UserError('Es liegen noch geparkte Änderungen von einem früheren Merge im Stash. Erst zurückholen.')
+          }
+          const parked = await ws.repo.park(`Merge & Review: geparkt vor dem Merge von ${source}`)
+          await memory.setParked(ws.info.id, { ...parked, source, before, at: Date.now() })
+        }
+        let outcome
+        try {
+          outcome = await ws.repo.merge(source, mode, message, { showBase: settings.current.showBase })
+        } catch (error) {
+          await restoreParked(ws, false).catch((e) => orca.log(`restore after failed merge: ${(e as Error).message}`))
+          throw error
+        }
         if (outcome.status === 'conflicts') {
           await memory.setPending(ws.info.id, { source, before, commits })
+          if (await memory.parked(ws.info.id)) {
+            outcome = { ...outcome, message: `${outcome.message} Deine geparkten Änderungen kommen nach dem Abschluss oder Abbruch zurück.` }
+          }
           await openReviewTab(orca, ws, { view: 'overview', source }).catch((e) => orca.log(String(e)))
-        } else if (outcome.status !== 'up-to-date') {
-          await memory.setLastMerge(ws.info.id, { source, before, after: await ws.repo.head(), at: Date.now(), commits })
-          void orca.host.call('notifications.show', { title: 'Merge & Review', body: outcome.message }).catch(() => {})
-          testAfterMerge(ws, source)
+        } else {
+          if (outcome.status !== 'up-to-date') {
+            await memory.setLastMerge(ws.info.id, { source, before, after: await ws.repo.head(), at: Date.now(), commits })
+          }
+          outcome = { ...outcome, message: outcome.message + (await restoreParked(ws, true)) }
+          if (outcome.status !== 'up-to-date') {
+            void orca.host.call('notifications.show', { title: 'Merge & Review', body: outcome.message }).catch(() => {})
+            testAfterMerge(ws, source)
+          }
         }
         return outcome
       },
@@ -161,6 +205,7 @@ export function registerHandlers(deps: Deps): void {
         const ws = await workspaces.resolve(workspaceId)
         await ws.repo.abort()
         await memory.setPending(ws.info.id, null)
+        await restoreParked(ws, true)
         return { ok: true as const }
       },
       touches
@@ -179,7 +224,8 @@ export function registerHandlers(deps: Deps): void {
           await memory.setLastMerge(ws.info.id, { source: p.source, before: p.before, after: hash, at: Date.now(), commits: p.commits })
           await memory.setPending(ws.info.id, null)
         }
-        void orca.host.call('notifications.show', { title: 'Merge & Review', body: 'Merge abgeschlossen.' }).catch(() => {})
+        const note = await restoreParked(ws, true)
+        void orca.host.call('notifications.show', { title: 'Merge & Review', body: `Merge abgeschlossen.${note}` }).catch(() => {})
         testAfterMerge(ws, p?.source ?? null)
         return { hash }
       },
@@ -290,6 +336,31 @@ export function registerHandlers(deps: Deps): void {
         prompt
       })
       return { how: 'launched' as const, terminalId: launched.terminalId }
+    })
+  )
+
+  orca.panels.handle(
+    'stash.restore',
+    guarded(
+      deps,
+      async ({ workspaceId }) => {
+        const ws = await workspaces.resolve(workspaceId)
+        const p = await memory.parked(ws.info.id)
+        if (!p) throw new UserError('Es gibt keine geparkten Änderungen.')
+        if (await ws.repo.mergeSummary()) throw new UserError('Erst den laufenden Merge abschließen oder abbrechen.')
+        const result = await ws.repo.unpark(p.sha, p.files)
+        if (result !== 'conflict') await memory.setParked(ws.info.id, null)
+        return { result: result as 'restored' | 'missing' | 'conflict' }
+      },
+      touches
+    )
+  )
+
+  orca.panels.handle(
+    'ui.sourceControl',
+    guarded(deps, async () => {
+      await orca.host.call('commands.run', { action: 'sidebar.sourceControl.toggle' })
+      return { ok: true as const }
     })
   )
 

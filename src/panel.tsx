@@ -142,8 +142,9 @@ async function compare(ref: string): Promise<void> {
 
 async function doMerge(): Promise<void> {
   set(confirm, null)
-  const out = await run('Merge läuft …', () =>
-    plugin.request('merge.run', defined({ source: read(source), mode: read(mode), message: read(message) || undefined }))
+  const park = (read(state)?.dirtyFiles.length ?? 0) > 0 || undefined
+  const out = await run(park ? 'Parke Änderungen und merge …' : 'Merge läuft …', () =>
+    plugin.request('merge.run', defined({ source: read(source), mode: read(mode), message: read(message) || undefined, park }))
   )
   if (out) set(notice, { tone: out.status === 'conflicts' ? 'warning' : 'success', text: out.message })
   set(message, '')
@@ -305,6 +306,8 @@ function ModeCompare({ st }: { st: RepoState }) {
 
   return (
     <Stack gap="md">
+      <DirtyCard st={st} />
+      <ParkedCard st={st} />
       {st.lastMerge ? (
         <Callout tone="success" icon="check" title={`${st.lastMerge.source} übernommen`}>
           <Stack gap="xs">
@@ -380,6 +383,56 @@ function ModeCompare({ st }: { st: RepoState }) {
 
       <WatchSection st={st} />
     </Stack>
+  )
+}
+
+/** Uncommitted tracked changes: say plainly that they block a plain merge, and what to do. */
+function DirtyCard({ st }: { st: RepoState }) {
+  const n = st.dirtyFiles.length
+  if (!n || st.merge) return null
+  return (
+    <Callout tone="warning" icon="warning" title={`${n} nicht committete Änderung(en)`}>
+      <Stack gap="xs">
+        <Text size="xs">{st.dirtyFiles.slice(0, 6).join(', ') + (n > 6 ? ` … (+${n - 6})` : '')}</Text>
+        <Text size="xs">
+          Ein Merge würde sie gefährden. Committe sie, oder lass sie beim Merge parken: Sie kommen danach automatisch zurück.
+        </Text>
+        <Button size="xs" variant="outline" icon="branch" onPress={() => void run('Öffne …', () => plugin.request('ui.sourceControl', {}), true)}>
+          Quellcodeverwaltung zeigen
+        </Button>
+      </Stack>
+    </Callout>
+  )
+}
+
+/** Changes parked for an earlier merge that did not come back by themselves. */
+function ParkedCard({ st }: { st: RepoState }) {
+  const p = st.parked
+  if (!p || st.merge) return null
+  return (
+    <Callout tone="accent" icon="info" title={`${p.files.length} geparkte Änderung(en) liegen im Stash`}>
+      <Stack gap="xs">
+        <Text size="xs">{p.files.slice(0, 6).join(', ') + (p.files.length > 6 ? ' …' : '')}</Text>
+        <Text size="xs" muted>
+          {`Geparkt für den Merge von ${p.source}. Der Merge hat dieselben Dateien geändert; beim Zurückholen können Konfliktmarker entstehen, die du dann auflöst.`}
+        </Text>
+        <Button
+          size="xs"
+          tone="accent"
+          onPress={async () => {
+            const r = await run('Hole zurück …', () => plugin.request('stash.restore', {}))
+            if (r) {
+              set(notice, r.result === 'conflict'
+                ? { tone: 'warning', text: 'Zurückgeholt mit Konflikten: die Dateien enthalten Konfliktmarker. Der Stash bleibt zur Sicherheit erhalten.' }
+                : { tone: 'success', text: 'Geparkte Änderungen sind zurück.' })
+            }
+            await load()
+          }}
+        >
+          Zurückholen
+        </Button>
+      </Stack>
+    </Callout>
   )
 }
 
@@ -518,10 +571,11 @@ function OverviewSection() {
 function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: string; opt: SourceOption | undefined }) {
   const conf = read(confirm)
   const working = !!read(busy)
-  const blockedBy = st.dirtyFiles.length
-    ? 'Erst committen oder stashen: der Arbeitsbaum hat Änderungen.'
-    : !st.branch
-      ? 'HEAD ist losgelöst: erst einen Branch auschecken.'
+  const dirty = st.dirtyFiles.length
+  const blockedBy = !st.branch
+    ? 'HEAD ist losgelöst: erst einen Branch auschecken.'
+    : st.parked
+      ? 'Erst die geparkten Änderungen vom letzten Merge zurückholen (Karte oben).'
       : null
   return (
     <Stack gap="sm">
@@ -640,9 +694,14 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
                 (c.preview.clean === false ? `, ${c.preview.conflicts.length} Konflikt-Datei(en) erwartet` : '') +
                 (opt?.agent === 'working' ? '. Achtung: der Agent der Quelle arbeitet noch.' : '.')}
             </Text>
+            {dirty ? (
+              <Text size="xs" tone="warning">
+                {`Vorher werden ${dirty} geänderte Datei(en) geparkt (git stash) und nach dem Merge zurückgeholt.`}
+              </Text>
+            ) : null}
             <Row gap="xs">
               <Button tone="accent" onPress={() => void doMerge()}>
-                Ja, mergen
+                {dirty ? 'Ja, parken und mergen' : 'Ja, mergen'}
               </Button>
               <Button variant="ghost" onPress={() => set(confirm, null)}>
                 Abbrechen
@@ -658,7 +717,7 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
           tooltip={blockedBy ?? undefined}
           onPress={() => set(confirm, 'merge')}
         >
-          {`${src} → ${st.branch} mergen`}
+          {dirty ? `Änderungen parken und ${src} mergen` : `${src} → ${st.branch} mergen`}
         </Button>
       )}
     </Stack>

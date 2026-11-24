@@ -286,3 +286,28 @@ test('K12: a probe merge answers at once and reports conflicts without touching 
     await worker.deactivate()
   }
 })
+
+test('park and merge: uncommitted changes are parked, merged around, and come back', async () => {
+  const dir = divergentRepo()
+  // feature changes a.txt only; our work in progress is in keep.txt (tracked).
+  writeFileSync(join(dir, 'keep.txt'), 'bleibt\n')
+  execFileSync('git', ['add', 'keep.txt'], { cwd: dir, stdio: 'ignore' })
+  execFileSync('git', ['commit', '-q', '-m', 'keep'], { cwd: dir, stdio: 'ignore' })
+  writeFileSync(join(dir, 'keep.txt'), 'meine Arbeit\n')
+  const host = mockHost({ results: hostResults(dir) })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    const st = await worker.request('repo.state', {})
+    assert.deepEqual(st.dirtyFiles, ['keep.txt'])
+    const out = await worker.request('merge.run', { source: 'feature', mode: 'no-ff', park: true })
+    assert.equal(out.status, 'conflicts')
+    assert.match(out.message, /kommen nach dem Abschluss oder Abbruch zurück/)
+    assert.equal(readFileSync(join(dir, 'keep.txt'), 'utf8'), 'bleibt\n', 'parked while merging')
+    await worker.request('conflict.takeFile', { path: 'a.txt', side: 'theirs' })
+    await worker.request('merge.commit', {})
+    assert.equal(readFileSync(join(dir, 'keep.txt'), 'utf8'), 'meine Arbeit\n', 'back after the commit')
+    assert.equal((await worker.request('repo.state', {})).parked, null)
+  } finally {
+    await worker.deactivate()
+  }
+})
