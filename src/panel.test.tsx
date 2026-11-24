@@ -7,6 +7,7 @@ const base: RepoState = {
   workspace: { id: 'ws', name: 'main', path: '/x', supported: true, hostId: 'local' },
   base: 'main',
   job: null,
+  parked: null,
   hasTestCommand: false,
   problem: null,
   branch: 'main',
@@ -136,18 +137,55 @@ test('K11: red tests after a merge show the output and offer an agent fix', asyn
   await view.unmount()
 })
 
-test('a dirty tree blocks the merge and says why', async () => {
+test('uncommitted changes are shown plainly; the merge parks them first', async () => {
+  const runs: unknown[] = []
   const host = mockHost({
     capabilities: CAPS,
     requests: {
-      'repo.state': () => ({ ...base, dirtyFiles: ['x.ts'] }),
+      'repo.state': () => ({ ...base, dirtyFiles: ['x.ts', 'package.json'] }),
       'repo.compare': () => comparison,
-      'watch.get': () => ({ watch: null })
+      'watch.get': () => ({ watch: null }),
+      'overview.list': () => ({ base: 'main', rows: [] }),
+      'merge.run': (input) => {
+        runs.push(input)
+        return { status: 'merged', message: 'feature gemergt. Deine geparkten Änderungen sind zurück.', conflicts: [] }
+      }
     }
   })
   const view = await mount(panel, { host })
   await view.settled()
-  assert.ok(view.find({ text: 'Erst committen oder stashen: der Arbeitsbaum hat Änderungen.' }))
+  const text = view.summary().join('\n') + JSON.stringify(view.tree())
+  assert.match(text, /2 nicht committete Änderung\(en\)/)
+  assert.match(text, /x\.ts, package\.json/)
+  await view.press({ text: 'Änderungen parken und feature mergen' })
+  assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /Vorher werden 2 geänderte Datei\(en\) geparkt/)
+  await view.press({ text: 'Ja, parken und mergen' })
+  await view.settled()
+  assert.deepEqual(runs[0], { source: 'feature', mode: 'no-ff', park: true })
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('changes still parked after a merge are offered back', async () => {
+  const restores: unknown[] = []
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => ({ ...base, suggestedSource: '', parked: { files: ['a.txt'], source: 'feature', at: 0 } }),
+      'watch.get': () => ({ watch: null }),
+      'overview.list': () => ({ base: 'main', rows: [] }),
+      'stash.restore': () => {
+        restores.push(1)
+        return { result: 'restored' }
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+  assert.match(view.summary().join('\n'), /1 geparkte Änderung\(en\) liegen im Stash/)
+  await view.press({ text: 'Zurückholen' })
+  await view.settled()
+  assert.equal(restores.length, 1)
   await view.unmount()
 })
 

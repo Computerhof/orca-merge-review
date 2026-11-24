@@ -59,6 +59,8 @@ export interface RepoState {
   workspace: WorkspaceInfo | null
   /** The project's base branch (remote default, else main/master/develop); null if none. */
   base: string | null
+  /** Changes parked for a merge that are not back yet (they come back after the merge, or by hand). */
+  parked: ParkedChanges | null
   /** The plugin's running or last job here (tests, probe merge), until dismissed. */
   job: JobState | null
   /** Whether a test command is configured (setting `testCommand`). */
@@ -122,6 +124,14 @@ export interface MergePreview {
   upToDate: boolean
   /** True when target can fast-forward to source. */
   fastForward: boolean
+}
+
+/** Tracked changes the plugin parked in the stash for a merge ("Änderungen parken und mergen"). */
+export interface ParkedChanges {
+  files: string[]
+  /** The source of the merge they were parked for. */
+  source: string
+  at: number
 }
 
 /** K11/K12: a long-running job of the plugin in one workspace: tests after a merge, or a probe merge. */

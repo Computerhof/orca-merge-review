@@ -31,7 +31,15 @@ declare module 'orca' {
       output: { patch: string; truncated: boolean }
     }
     /** Merges `source` into the current branch. Refuses on a dirty tree or an ongoing merge. */
-    'merge.run': { input: Ws & { source: string; mode: MergeMode; message?: string }; output: MergeOutcome }
+    'merge.run': {
+      /** `park`: first park uncommitted tracked changes in the stash; they come back after the merge. */
+      input: Ws & { source: string; mode: MergeMode; message?: string; park?: boolean }
+      output: MergeOutcome
+    }
+    /** Brings changes parked for a merge back now (git stash pop), even if the merge touched the same files. */
+    'stash.restore': { input: Ws; output: { result: 'restored' | 'missing' | 'conflict' } }
+    /** Shows Orca's source control sidebar (to commit uncommitted changes). */
+    'ui.sourceControl': { input: Ws; output: { ok: true } }
     /** git merge --abort (or reset --merge after a squash). */
     'merge.abort': { input: Ws; output: { ok: true } }
     /** Concludes the ongoing merge with a commit once nothing is unmerged. */

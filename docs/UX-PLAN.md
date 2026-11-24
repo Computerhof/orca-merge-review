@@ -22,8 +22,9 @@
    „**Eingehend (feature-x)**“, beide Male mit dem echten Branch-Namen.
 4. **Gesperrt heißt erklärt.** Ein deaktivierter Knopf sagt immer, warum, und was zu tun ist
    (z. B. „3 nicht committete Änderungen: erst committen oder stashen“).
-5. **Nie Arbeit verlieren.** Ein Merge ist bei schmutzigem Arbeitsbaum gesperrt. Abbrechen geht immer und
-   ist immer bestätigt.
+5. **Nie Arbeit verlieren.** Nicht committete Änderungen werden für einen Merge geparkt (git stash) und danach
+   zurückgeholt; überschneiden sie sich mit dem Merge, bleiben sie geparkt, bis der Mensch entscheidet
+   (E7, 2026-11-24). Abbrechen geht immer und ist immer bestätigt.
 6. **Orca-Begriffe zuerst.** Als Quelle stehen Orca-**Workspaces** (Name + Branch + Agent-Status) oben,
    danach die übrigen Branches und Remotes.
 7. **Jeder Kreis schließt sich (Vorbild Orca).** Kein Zustand endet in einer Sackgasse. Jeder Endpunkt bietet

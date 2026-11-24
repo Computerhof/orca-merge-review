@@ -7,6 +7,18 @@ oder einer Capability-Erweiterung, die Nutzer neu freigeben müssen.
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **Änderungen parken und mergen:** Nicht committete Änderungen sperren den Merge nicht mehr stumm. Eine Karte
+  nennt die Dateien; der Merge-Knopf parkt sie (git stash), merged und holt sie danach zurück, bei Konflikten nach
+  Abschluss oder Abbruch. Hat der Merge dieselben Dateien geändert, bleiben sie geparkt und das Panel bietet
+  „Zurückholen“ an, statt Konfliktmarker in deine Arbeit zu schreiben. `merge.run` nimmt `park`; neu
+  `stash.restore`, `ui.sourceControl`, `RepoState.parked`.
+- Knopf „Quellcodeverwaltung zeigen“ (Orcas Seitenleiste zum Committen).
+
+### Behoben
+- „Jetzt echt mergen“ nach einem Probe-Merge bot einen Merge an, den die Sperre dann ablehnte.
+- Begründete Ablehnungen (z. B. „nicht committete Änderungen“) stehen jetzt auch im Plugin-Log (`refused: …`).
+
 ## [0.2.0] - 2026-11-24
 
 ### Hinzugefügt

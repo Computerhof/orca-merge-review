@@ -282,3 +282,37 @@ test('resolving a block keeps the bytes of a file that is not UTF-8 (Windows-125
     await s.repo.resolveHunk('w.txt', 0, 'theirs')
     assert.deepEqual(await readFile(join(s.dir, 'w.txt')), cp1252('Grüße\nzwei-Fäden\nEnde\n'))
   }))
+
+test('park and unpark: back when the merge did not touch the parked files', () =>
+  withSandbox(async (s) => {
+    await s.git('checkout', '--quiet', '-b', 'feature')
+    await s.commit('f', { 'b.txt': 'neu\n' })
+    await s.git('checkout', '--quiet', 'main')
+    const before = (await s.git('rev-parse', 'HEAD')).trim()
+    await s.write('keep.txt', 'meine Arbeit\n')
+    const parked = await s.repo.park('test')
+    assert.deepEqual(parked.files, ['keep.txt'])
+    assert.equal(await s.read('keep.txt'), 'bleibt\n', 'parked: the tree is clean')
+    await s.repo.merge('feature', 'no-ff')
+    assert.equal(await s.repo.unpark(parked.sha, parked.files, before), 'restored')
+    assert.equal(await s.read('keep.txt'), 'meine Arbeit\n')
+    assert.equal((await s.git('stash', 'list')).trim(), '')
+  }))
+
+test('park and unpark: stays parked when the merge changed the same file', () =>
+  withSandbox(async (s) => {
+    await s.git('checkout', '--quiet', '-b', 'feature')
+    await s.commit('f', { 'keep.txt': 'von feature\n' })
+    await s.git('checkout', '--quiet', 'main')
+    const before = (await s.git('rev-parse', 'HEAD')).trim()
+    await s.write('keep.txt', 'meine Arbeit\n')
+    const parked = await s.repo.park('test')
+    await s.repo.merge('feature', 'ff')
+    assert.equal(await s.repo.unpark(parked.sha, parked.files, before), 'overlap')
+    assert.equal(await s.read('keep.txt'), 'von feature\n', 'nothing written into the file')
+    assert.match(await s.git('stash', 'list'), /test/)
+    // By hand (no `since`): Git tries; a clash leaves markers and keeps the stash.
+    assert.equal(await s.repo.unpark(parked.sha, parked.files), 'conflict')
+    assert.match(await s.git('stash', 'list'), /test/)
+    assert.equal(await s.repo.unpark('0'.repeat(40), []), 'missing')
+  }))
