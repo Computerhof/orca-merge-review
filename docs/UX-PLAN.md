@@ -126,3 +126,24 @@ Danach eine Erfolgsmeldung („3 Commits übernommen“) und zurück zu Modus A.
 
 ## 5. Nicht in v0.1
 Rebase, Cherry-Pick, Stash-Verwaltung, Push/PR, SSH-/Remote-Hosts (Git läuft lokal).
+
+## 6. v0.2: Entscheidungen und Kreise (2026-11-24)
+
+Chris hat alle vorgeschlagenen Features gewählt, dazu drei Richtungsentscheidungen:
+**E4** Probe-Merge in einem versteckten Temp-Worktree, den das Plugin selbst anlegt und wieder entfernt
+(kein Orca-Workspace, denn die Plugin-API kann Workspaces nicht entfernen). **E5** Tests laufen im Worker
+(Exit-Code sicher), ein Knopf zeigt sie zusätzlich in einem Orca-Terminal. **E6** Markerfrei gespeicherte
+Konfliktdateien werden automatisch als gelöst markiert, mit Hinweis; abschaltbar.
+
+| Kreis | Auslöser | Was das Plugin tut | Orca-Mittel |
+|---|---|---|---|
+| **K10 Was ist bereit?** | Panel auf dem Base-Workspace (z. B. `main`) | Liste „Bereit zum Mergen“: alle Workspaces des Projekts mit Agent-Status, Commits vor/hinter der Base und Vorhersage (konfliktfrei / N Konflikte / schon enthalten). Klick wählt die Quelle und vergleicht | `workspace.list` mit Status, `merge-tree` je Workspace |
+| **K11 Merge → Tests** | Merge, Fast-forward, Squash oder Abschluss erfolgreich, Testbefehl gesetzt | Status-Leiste „Tests laufen …“, danach grün/rot. Rot: Karte mit den letzten Zeilen und „Agent repariert“, „Rückgängig“, „Im Terminal ansehen“ | Worker-Prozess, `terminal.create`, `agent.launch`, `statusBar.update` |
+| **K12 Erst proben** | „Probe-Merge“ vor dem echten Merge | Temp-Worktree vom aktuellen Stand, dort mergen (und testen), Ergebnis als Karte; der Arbeitsbaum bleibt unberührt. Danach „Jetzt echt mergen“ | `git worktree add/remove` im Temp-Ordner |
+| **K13 Speichern = gelöst** | Konfliktdatei im Orca-Editor ohne Marker gespeichert | Datei wird als gelöst markiert (`git add`), Panel zeigt einen Hinweis, Status-Leiste zählt herunter | Hook `editor.save.before` |
+| **K14 Merge-Hinweis an Agenten** | Prompt an einen Agenten in einem Workspace mit laufendem Merge | Orca stellt dem Prompt einen kurzen Hinweis voran: Merge läuft, nicht abbrechen, nicht committen. Ergänzt den Agenten-Schutz | Hook `agent.prompt.before`, `terminal.list` |
+| **K15 Zum Agenten** | Agent-Badge einer Quelle | „Zum Agenten“ fokussiert das Terminal des Agenten, sonst öffnet es den Workspace | `agents.list`, `terminal.focus`, `workspace.open` |
+
+Kleinere Ergänzungen: Der Review-Tab übernimmt Schrift und Größe von Orcas Editor
+(`editor.readTypography`). Notizen im Tab bleiben pro Datei erhalten und lassen sich mit Vergleich, Commits
+und Dateien als Markdown speichern (`files.saveAs`), z. B. für einen PR-Text.

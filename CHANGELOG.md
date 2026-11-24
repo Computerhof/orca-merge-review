@@ -7,6 +7,18 @@ oder einer Capability-Erweiterung, die Nutzer neu freigeben müssen.
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **Speichern = gelöst:** Eine Konfliktdatei, die im Orca-Editor ohne Marker gespeichert wird, wird automatisch
+  als gelöst markiert (`git add`), mit Hinweis im Panel. Einstellung `autoMarkResolved` (Standard: an).
+- **Merge-Hinweis an Agenten:** Prompts an einen Agenten in einem Workspace mit laufendem Merge bekommen einen
+  einzeiligen Hinweis vorangestellt (nicht abbrechen, nicht committen). Hook `agent.prompt.before`; folgt der
+  Einstellung „Agenten-Schutz“.
+- **Zum Agenten:** Knopf neben dem Agent-Status einer Quelle und in der Erfolgskarte nach dem Merge; fokussiert
+  das Terminal des Agenten oder öffnet den Workspace. Request `agent.focus`.
+- **Review-Tab:** übernimmt Schrift, Größe und Zeilenhöhe von Orcas Editor; Notizen bleiben pro Datei erhalten
+  (auch ohne Agent-Workspace) und lassen sich mit Vergleich, Commits und Dateien als Markdown speichern.
+- Panel-Event `conflict.autoResolved`.
+
 ## [0.1.1] - 2026-11-24
 
 ### Behoben

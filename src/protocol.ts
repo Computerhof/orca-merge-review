@@ -37,6 +37,8 @@ declare module 'orca' {
     'merge.commit': { input: Ws & { message?: string }; output: { hash: string } }
     /** Undoes the last merge this plugin made here, if nothing happened since. */
     'merge.undo': { input: Ws; output: { ok: true } }
+    /** Focuses the terminal of the agent working on `source` (a workspace of this project), else opens that workspace. */
+    'agent.focus': { input: Ws & { source: string }; output: { how: 'terminal' | 'workspace' } }
     /** The conflict blocks of one unmerged file. */
     'conflict.get': { input: Ws & { path: string }; output: ConflictFile }
     /** Replaces one conflict block with a side, writes the file, answers the file again. With
@@ -65,6 +67,8 @@ declare module 'orca' {
   interface PluginPanelEvents {
     /** Posted after anything changed a repository, so open panels and tabs reload. */
     'repo.changed': { workspaceId: string | null; reason: string }
+    /** A conflicted file was saved without markers and marked resolved automatically (setting autoMarkResolved). */
+    'conflict.autoResolved': { workspaceId: string; path: string }
     /** The agent of a compared source workspace finished: the comparison may be stale. */
     'source.updated': { workspaceId: string; source: string }
   }

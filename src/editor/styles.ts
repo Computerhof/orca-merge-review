@@ -33,7 +33,8 @@ main.empty, .empty { display: grid; place-items: center; color: var(--orca-muted
 .mark { font-family: var(--orca-font-mono, monospace); width: 1.4em; }
 .mark.warn { color: #d9a400; } .mark.ok { color: #2e9e5b; }
 .commit { padding: 2px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-code, pre, .code, .no { font-family: var(--orca-font-mono, ui-monospace, monospace); font-size: 12px; }
+code, pre, .code, .no { font-family: var(--mr-code-font, var(--orca-font-mono, ui-monospace, monospace));
+  font-size: var(--mr-code-size, 12px); line-height: var(--mr-code-line, normal); }
 .content { overflow: auto; min-width: 0; }
 .notice { margin: 10px 12px 0; padding: 8px 10px; border-radius: var(--orca-radius, 6px); background: var(--orca-muted); }
 .notice.ok { background: color-mix(in srgb, #2e9e5b 18%, transparent); }

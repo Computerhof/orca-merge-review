@@ -3,6 +3,7 @@
 // are untrusted: they only ever reach the DOM through textContent, never as HTML.
 import '../protocol.ts'
 import { sideBySide } from '../core/diffview.ts'
+import { reviewMarkdown, type ReviewNote } from '../core/reviewExport.ts'
 import { defined } from '../defined.ts'
 import { VERSION } from '../version.ts'
 import type {
@@ -53,6 +54,10 @@ let loading = false
 let seq = 0
 /** A conflict action is in flight: keys and buttons wait instead of acting on a stale view. */
 let busy = false
+
+/** Notes written in this tab: drafts per file (kept while switching files) and those already sent. */
+const drafts = new Map<string, string>()
+const sentNotes: ReviewNote[] = []
 
 const ws = () => defined({ workspaceId: ticket?.workspaceId })
 
@@ -205,6 +210,7 @@ async function sendNote(note: string, path: string | undefined): Promise<boolean
   if (!cmp) return false
   const r = await call(() => orca.plugin.request('agent.feedback', defined({ ...ws(), source: cmp!.source, path, note })))
   if (!r) return false
+  sentNotes.push({ path: path ?? null, text: note, sent: true })
   message = {
     tone: 'ok',
     text: r.how === 'sent' ? 'An den laufenden Agenten geschickt.' : r.how === 'resumed' ? 'Session fortgesetzt, Anmerkung folgt, sobald der Agent bereit ist.' : 'Neuen Agenten mit der Anmerkung gestartet.'
@@ -233,8 +239,32 @@ function header(): HTMLElement {
     badge(),
     el('div', { class: 'spacer' }),
     loading ? el('span', { class: 'muted' }, 'lädt …') : null,
+    cmp && !repo?.merge && orca.files ? button('Als Markdown speichern', exportReview, 'plain', 'Vergleich, Commits, Dateien und Anmerkungen, z. B. für einen PR-Text') : null,
     button('Neu laden', () => void reload())
   )
+}
+
+/** Runs inside the click: Orca's save dialog needs the person's gesture. */
+function exportReview(): void {
+  if (!cmp || !orca.files) return
+  const notes: ReviewNote[] = [
+    ...sentNotes,
+    ...[...drafts].filter(([, text]) => text.trim()).map(([path, text]) => ({ path, text, sent: false }))
+  ]
+  const md = reviewMarkdown({ target: repo?.branch ?? 'HEAD', comparison: cmp, notes, at: Date.now(), version: VERSION })
+  const name = `review-${cmp.source.replace(/[^A-Za-z0-9._-]+/g, '-')}.md`
+  orca.files
+    .saveAs({ suggestedName: name, mimeType: 'text/markdown', data: md })
+    .then((r) => {
+      if (r.status === 'saved') {
+        message = { tone: 'ok', text: 'Review als Markdown gespeichert.' }
+        render()
+      }
+    })
+    .catch((error: unknown) => {
+      message = { tone: 'err', text: error instanceof Error ? error.message : String(error) }
+      render()
+    })
 }
 
 function badge(): HTMLElement | null {
@@ -321,7 +351,7 @@ function diffView(): HTMLElement {
     return box
   }
   const table = el('table', { class: 'sbs' })
-  const noteField = isWorkspace ? noteBox(selected!) : null
+  const noteField = noteBox(selected!, !!isWorkspace)
   for (const r of patchRows) {
     if (r.kind === 'meta') continue
     if (r.kind === 'hunk') {
@@ -331,7 +361,7 @@ function diffView(): HTMLElement {
     const lineNo = (n: number | null) =>
       el('td', {
         class: 'no',
-        title: isWorkspace && n ? 'Klicken: Anmerkung zu dieser Zeile' : '',
+        title: n ? 'Klicken: Anmerkung zu dieser Zeile' : '',
         onclick: () => {
           if (noteField && n) noteField.prefill(`Zeile ${n}: `)
         }
@@ -348,19 +378,31 @@ function diffView(): HTMLElement {
     )
   }
   box.append(table)
-  if (noteField) box.append(noteField.node)
+  box.append(noteField.node)
   return box
 }
 
-function noteBox(path: string): { node: HTMLElement; prefill: (s: string) => void } {
-  const area = el('textarea', { rows: '3', placeholder: 'Anmerkung an den Agenten der Quelle … (Klick auf eine Zeilennummer fügt sie ein)' })
+function noteBox(path: string, toAgent: boolean): { node: HTMLElement; prefill: (s: string) => void } {
+  const area = el('textarea', {
+    rows: '3',
+    placeholder: toAgent
+      ? 'Anmerkung an den Agenten der Quelle … (Klick auf eine Zeilennummer fügt sie ein)'
+      : 'Review-Notiz zu dieser Datei … (Klick auf eine Zeilennummer fügt sie ein; „Als Markdown speichern“ nimmt sie mit)',
+    oninput: () => drafts.set(path, area.value)
+  })
+  area.value = drafts.get(path) ?? '' // the draft survives switching files and re-renders
   const node = el(
     'div',
     { class: 'note' },
     area,
-    el('div', { class: 'row' }, button('An Agent senden', async () => {
-      if (area.value.trim() && (await sendNote(area.value, path))) area.value = ''
-    }, 'primary'))
+    toAgent
+      ? el('div', { class: 'row' }, button('An Agent senden', async () => {
+          if (area.value.trim() && (await sendNote(area.value, path))) {
+            area.value = ''
+            drafts.delete(path)
+          }
+        }, 'primary'))
+      : null
   )
   return {
     node,
@@ -458,8 +500,23 @@ document.addEventListener('keydown', (e) => {
 
 // ------------------------------------------------------------------ start
 
+type Typography = { cssFontFamily: string; fontSize: number; lineHeight: number }
+
+/** Code in the tab looks like code in Orca's editor (font, size, line height, zoom included). */
+function applyTypography(t: Typography): void {
+  const s = document.documentElement.style
+  s.setProperty('--mr-code-font', t.cssFontFamily)
+  s.setProperty('--mr-code-size', `${t.fontSize}px`)
+  // Monaco's convention: 0 = automatic, below 8 a multiple of the font size, else pixels.
+  s.setProperty('--mr-code-line', t.lineHeight <= 0 ? 'normal' : t.lineHeight < 8 ? String(t.lineHeight) : `${t.lineHeight}px`)
+}
+
 async function start(): Promise<void> {
   document.head.append(el('style', {}, STYLES))
+  if (orca.host.has('editor.readTypography')) {
+    orca.host.call('editor.readTypography').then(applyTypography).catch(() => {})
+    orca.on('editor.typography.changed', applyTypography)
+  }
   document.body.append(root)
   render()
   const doc = await orca.document!.session<ReviewTicket | null>({

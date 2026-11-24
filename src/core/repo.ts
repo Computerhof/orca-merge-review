@@ -526,6 +526,20 @@ export function checkPath(path: string): string {
   return p
 }
 
+/**
+ * A path Orca reports (absolute, or already relative) as repository-relative with forward slashes;
+ * null when it lies outside `root`. Case-insensitive where the file system is (Windows, macOS).
+ */
+export function relativeTo(root: string, path: string, caseInsensitive = process.platform === 'win32' || process.platform === 'darwin'): string | null {
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const r = norm(root)
+  const p = norm(path)
+  if (!/^([a-zA-Z]:)?\//.test(p)) return p.replace(/^\.\//, '') || null
+  const fold = (s: string) => (caseInsensitive ? s.toLowerCase() : s)
+  if (!fold(p).startsWith(fold(r) + '/')) return null
+  return p.slice(r.length + 1)
+}
+
 export function parseNameStatus(out: string): Omit<FileChange, 'added' | 'deleted'>[] {
   const parts = out.split('\0')
   const files: Omit<FileChange, 'added' | 'deleted'>[] = []

@@ -4,6 +4,7 @@ import type { OrcaWorkerApi } from 'orca/worker'
 import { commandOf, guardDecision, runsGit } from './core/gitGuard.ts'
 import { LocalGitRunner } from './git/runner.ts'
 import { PendingSends } from './worker/agents.ts'
+import { onSave, promptHint } from './worker/circles.ts'
 import { registerHandlers } from './worker/handlers.ts'
 import { Memory } from './worker/memory.ts'
 import { Monitor } from './worker/monitor.ts'
@@ -67,9 +68,15 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     if (command && runsGit(command)) mon.schedule(workspaces.canonical(e.workspaceId), 'agent-git')
   })
 
-  orca.hooks.on('editor.save.before', (e) => {
-    const id = workspaces.canonical(e.workspaceId)
-    if (mon.isMerging(id)) mon.schedule(id, 'save')
+  const circles = { orca, workspaces, monitor: mon, settings }
+
+  // K13: a conflicted file saved without markers is marked resolved shortly after (never refuses).
+  orca.hooks.on('editor.save.before', (e) => onSave(circles, e))
+
+  // K14: prompts to an agent in a merging workspace get a one-line merge hint in front.
+  orca.hooks.on('agent.prompt.before', async (e, next) => {
+    const hint = await promptHint(circles, e).catch(() => null)
+    if (hint) return next({ ...e, prompt: `${hint} ${e.prompt}` })
   })
 
   // --- Commands (palette, shortcuts, status bar).

@@ -149,6 +149,19 @@ async function act(label: string, fn: () => Promise<unknown>, done?: string): Pr
 const openTab = (input: ReviewView) =>
   run('Öffne …', () => plugin.request('review.open', defined(input)))
 
+/** K15: to the agent of a source workspace (its terminal), else to that workspace. */
+const focusAgent = (src: string) =>
+  run('Wechsle …', () => plugin.request('agent.focus', { source: src }), true)
+
+function AgentButton({ opt }: { opt: SourceOption }) {
+  const live = !!opt.agent && opt.agent !== 'inactive'
+  return (
+    <Button size="xs" variant="ghost" icon={live ? 'agent' : 'open-external'} onPress={() => void focusAgent(opt.ref)}>
+      {live ? 'Zum Agenten' : 'Workspace öffnen'}
+    </Button>
+  )
+}
+
 // ------------------------------------------------------------------ setup
 
 /** The worker refreshes 400 ms after a request and then reports it; a load within this is ours. */
@@ -166,6 +179,11 @@ export function setup(ctx: PanelContext): void {
       if (reason === 'focus' || (reason === 'request' && Date.now() - lastLoadAt < ECHO_MS)) return
       const mine = read(state)?.workspace?.id
       if (!workspaceId || !mine || workspaceId === mine) void load()
+    }),
+    plugin.on('conflict.autoResolved', ({ workspaceId, path }) => {
+      if (workspaceId === read(state)?.workspace?.id) {
+        set(notice, { tone: 'success', text: `${path} ohne Konfliktmarker gespeichert und als gelöst markiert.` })
+      }
     }),
     plugin.on('source.updated', ({ workspaceId, source: src }) => {
       if (workspaceId === read(state)?.workspace?.id && src === read(source)) set(stale, true)
@@ -279,6 +297,11 @@ function ModeCompare({ st }: { st: RepoState }) {
               {`${st.lastMerge.commits} Commit(s) · `}
               <RelativeTime at={st.lastMerge.at} />
             </Text>
+            {(() => {
+              // K7: after merging an agent's work, its workspace is one click away (e.g. to remove it in Orca).
+              const from = st.sources.find((s) => s.ref === st.lastMerge!.source && s.kind === 'workspace')
+              return from ? <AgentButton opt={from} /> : null
+            })()}
             {conf === 'undo' ? (
               <Row gap="xs" wrap>
                 <Text size="xs" tone="danger">{`HEAD zurück auf ${st.lastMerge.before.slice(0, 8)}?`}</Text>
@@ -305,11 +328,14 @@ function ModeCompare({ st }: { st: RepoState }) {
         options={st.sources.slice(0, 400).map((s) => ({ value: s.ref, label: sourceLabel(s) }))}
         onChange={(v) => void compare(v)}
       />
-      {opt?.agent && opt.agent !== 'inactive' ? (
-        <Row gap="xs">
-          <Badge tone={opt.agent === 'working' || opt.agent === 'permission' ? 'warning' : 'neutral'}>
-            {AGENT_LABEL[opt.agent]}
-          </Badge>
+      {opt?.kind === 'workspace' ? (
+        <Row gap="xs" align="center">
+          {opt.agent && opt.agent !== 'inactive' ? (
+            <Badge tone={opt.agent === 'working' || opt.agent === 'permission' ? 'warning' : 'neutral'}>
+              {AGENT_LABEL[opt.agent]}
+            </Badge>
+          ) : null}
+          <AgentButton opt={opt} />
         </Row>
       ) : null}
       {read(stale) ? (

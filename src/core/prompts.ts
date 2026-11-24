@@ -49,3 +49,19 @@ export function mergeWatchPrompt(input: { base: string }): string {
     'Ändere nichts: kein Merge, kein Commit, kein Checkout, kein Push.'
   ].join('\n')
 }
+
+/** Marks text the plugin itself put in front of a prompt, so it is never added twice. */
+export const MERGE_HINT_TAG = '[Merge & Review]'
+
+/**
+ * One line put in front of any prompt that reaches an agent in a workspace with a running merge.
+ * One line on purpose: a prompt typed into a running agent's TUI is submitted on Enter.
+ */
+export function mergeHintPrompt(input: { source: string; open: number }): string {
+  const open = input.open ? `${input.open} Datei(en) haben noch Konflikte. ` : ''
+  return (
+    `${MERGE_HINT_TAG} In diesem Workspace läuft ein Merge von \`${input.source}\`. ${open}` +
+    'Merge nicht abbrechen, nicht committen, kein reset/stash/checkout des ganzen Baums; ' +
+    'gelöste Dateien nur mit `git add` markieren. Der Mensch schließt den Merge in Merge & Review ab.'
+  )
+}

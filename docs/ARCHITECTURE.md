@@ -12,7 +12,8 @@ src/
     conflicts.ts        Konfliktmarker lesen/auflösen (merge, diff3), Zeilenenden bleiben erhalten
     diffview.ts         Unified Patch → Side-by-Side-Zeilen
     gitGuard.ts         Agent-Toolaufruf → „zerstört das einen laufenden Merge?“ (synchron)
-    prompts.ts          Texte für Agenten (Review-Anmerkung, Konfliktauftrag, Merge-Wächter)
+    prompts.ts          Texte für Agenten (Review-Anmerkung, Konfliktauftrag, Merge-Wächter, Merge-Hinweis)
+    reviewExport.ts     Review als Markdown (Vergleich, Commits, Dateien, Notizen)
   git/                  ── austauschbare Anbindung ──
     runner.ts           GitRunner-Schnittstelle + LocalGitRunner (execFile, keine Shell)
     files.ts            FileAccess auf das lokale Dateisystem (UTF-8, sonst verlustfrei latin1)
@@ -25,6 +26,7 @@ src/
     reviewTab.ts        Hilfsdatei schreiben + editor.open
     agents.ts           Anmerkung zustellen (laufend → fortsetzen → neu), Warteschlange
     watch.ts            Merge-Wächter als Orca-Automation
+    circles.ts          K13 Speichern = gelöst, K14 Merge-Hinweis im Prompt, K15 Zum Agenten
     memory.ts           Plugin-Speicher: letzte Quelle, Undo-Daten, beobachtete Quellen
     settings.ts         Einstellungen, synchron lesbar
   panel.tsx             Seitenleiste (Orca-Komponenten), Modi A/B/C
