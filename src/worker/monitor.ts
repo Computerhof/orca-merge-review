@@ -3,6 +3,7 @@
 // operations, after agents run git, after saves, and on a slow timer for the focused workspace.
 import type { OrcaWorkerApi } from 'orca/worker'
 import { mergeMarkersSync } from '../git/mergeMarkers.ts'
+import type { JobState } from '../types.ts'
 import type { Workspaces } from './workspaces.ts'
 
 export interface MergeSnapshot {
@@ -21,6 +22,8 @@ export class Monitor {
   /** Per workspace: bumped by each refresh, so a slower older one never overwrites a newer answer. */
   private readonly runs = new Map<string, number>()
   private stopped = false
+  /** The plugin's job in a workspace (tests, probe), shown in the status bar while no merge runs. */
+  jobOf: (workspaceId: string) => JobState | null = () => null
   private focused: string | null = null
   private poll: ReturnType<typeof setInterval> | null = null
   private readonly orca: OrcaWorkerApi
@@ -108,10 +111,42 @@ export class Monitor {
     return snap
   }
 
+  /** A job changed: repaint the status bar if it concerns the focused workspace. */
+  repaint(workspaceId: string): void {
+    if (workspaceId === this.focused) void this.paint(this.snapshots.get(workspaceId) ?? null)
+  }
+
+  /** No merge running: the status bar shows a running or failed test / probe job, else nothing. */
+  private async paintJob(): Promise<void> {
+    const job = this.focused ? this.jobOf(this.focused) : null
+    const what = job?.kind === 'probe' ? 'Probe-Merge' : 'Tests'
+    if (job?.status === 'running') {
+      await this.orca.host.call('statusBar.update', {
+        id: 'merge',
+        visible: true,
+        icon: 'activity',
+        tone: 'accent',
+        text: job.kind === 'probe' ? 'Probe-Merge läuft …' : 'Tests laufen …',
+        tooltip: job.message
+      })
+    } else if (job && (job.status === 'failed' || job.status === 'error' || job.status === 'conflicts')) {
+      await this.orca.host.call('statusBar.update', {
+        id: 'merge',
+        visible: true,
+        icon: 'error',
+        tone: 'danger',
+        text: job.status === 'conflicts' ? 'Probe-Merge: Konflikte' : job.status === 'error' ? `${what}: Fehler` : `${what}: rot`,
+        tooltip: `${job.message} Details im Panel Merge & Review.`
+      })
+    } else {
+      await this.orca.host.call('statusBar.update', { id: 'merge', visible: false })
+    }
+  }
+
   private async paint(snap: MergeSnapshot | null): Promise<void> {
     try {
       if (!snap?.merging) {
-        await this.orca.host.call('statusBar.update', { id: 'merge', visible: false })
+        await this.paintJob()
         return
       }
       const ready = snap.total === 0 || snap.open === 0

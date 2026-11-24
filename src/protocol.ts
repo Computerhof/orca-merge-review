@@ -38,6 +38,18 @@ declare module 'orca' {
     'merge.commit': { input: Ws & { message?: string }; output: { hash: string } }
     /** Undoes the last merge this plugin made here, if nothing happened since. */
     'merge.undo': { input: Ws; output: { ok: true } }
+    /** K12: tries merging `source` in a temporary worktree (with tests if set); answers at once, the result follows as `job.changed`. */
+    'merge.probe': { input: Ws & { source: string; withTests?: boolean }; output: { started: true } }
+    /** K11: runs the test command in the workspace now. */
+    'tests.run': { input: Ws; output: { started: true } }
+    /** K11: shows the test command running in a new Orca terminal of the workspace. */
+    'tests.terminal': { input: Ws; output: { terminalId: string } }
+    /** K11: starts an agent with the failing output to fix the cause. */
+    'tests.fix': { input: Ws; output: AgentDelivery }
+    /** Stops the running test or probe. */
+    'job.cancel': { input: Ws; output: { ok: true } }
+    /** Hides the last job's result. */
+    'job.dismiss': { input: Ws; output: { ok: true } }
     /** K10: every workspace of the project, seen from this (base) workspace: agent, ahead/behind, prediction. */
     'overview.list': { input: Ws; output: Overview }
     /** Focuses the terminal of the agent working on `source` (a workspace of this project), else opens that workspace. */
@@ -70,6 +82,8 @@ declare module 'orca' {
   interface PluginPanelEvents {
     /** Posted after anything changed a repository, so open panels and tabs reload. */
     'repo.changed': { workspaceId: string | null; reason: string }
+    /** A test run or probe merge started, finished or was dismissed; read `RepoState.job`. */
+    'job.changed': { workspaceId: string }
     /** A conflicted file was saved without markers and marked resolved automatically (setting autoMarkResolved). */
     'conflict.autoResolved': { workspaceId: string; path: string }
     /** The agent of a compared source workspace finished: the comparison may be stale. */

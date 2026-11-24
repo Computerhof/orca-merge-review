@@ -50,6 +50,29 @@ export function mergeWatchPrompt(input: { base: string }): string {
   ].join('\n')
 }
 
+/** K11: tests went red after a merge; the agent finds and fixes the cause on top of the merge. */
+export function testFixPrompt(input: {
+  target: string
+  source: string | null
+  command: string
+  exitCode: number | null
+  tail: readonly string[]
+}): string {
+  const what = input.source ? `Nach dem Merge von \`${input.source}\` in \`${input.target}\`` : `Auf \`${input.target}\``
+  return [
+    `${what} schlagen die Tests fehl (Merge & Review): \`${input.command}\` endete mit Exit ${input.exitCode ?? '?'}.`,
+    '',
+    'Letzte Ausgabe:',
+    '```',
+    ...input.tail.slice(-40),
+    '```',
+    '',
+    'Aufgabe: Finde die Ursache und behebe sie, bis der Befehl grün ist. Committe die Korrektur als',
+    'eigenen Commit mit einer kurzen Begründung.',
+    'Regeln: Den Merge nicht rückgängig machen (kein reset, kein revert), kein Push, keine Tests abschalten.'
+  ].join('\n')
+}
+
 /** Marks text the plugin itself put in front of a prompt, so it is never added twice. */
 export const MERGE_HINT_TAG = '[Merge & Review]'
 

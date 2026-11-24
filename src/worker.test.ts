@@ -1,5 +1,6 @@
 // The real worker (src/worker.ts) over a mock Orca host and a real Git repository.
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
+import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import * as main from './worker'
@@ -221,6 +222,66 @@ test('K10: the base workspace lists the other workspaces with their prediction',
     assert.deepEqual(o.rows[0].preview.conflicts, ['a.txt'])
     // A second call answers from the cache: same result, no new merge-tree needed.
     assert.deepEqual(await worker.request('overview.list', {}), o)
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('K11: after a clean merge the configured tests run; red offers an agent fix', async () => {
+  const dir = divergentRepo()
+  // Make the merge clean: resolve the divergence on main first.
+  execFileSync('git', ['merge', '-X', 'theirs', '--no-edit', 'feature'], { cwd: dir, stdio: 'ignore' })
+  execFileSync('git', ['checkout', '-q', '-b', 'more', 'feature'], { cwd: dir, stdio: 'ignore' })
+  writeFileSync(join(dir, 'more.txt'), 'x')
+  execFileSync('git', ['add', 'more.txt'], { cwd: dir, stdio: 'ignore' })
+  execFileSync('git', ['commit', '-q', '-m', 'more'], { cwd: dir, stdio: 'ignore' })
+  execFileSync('git', ['checkout', '-q', 'main'], { cwd: dir, stdio: 'ignore' })
+  const host = mockHost({
+    results: hostResults(dir),
+    settings: { testCommand: 'node -e "console.log(1234);process.exit(7)"' }
+  })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    const out = await worker.request('merge.run', { source: 'more', mode: 'no-ff' })
+    assert.equal(out.status, 'merged')
+    let st = await worker.request('repo.state', {})
+    for (let i = 0; i < 100 && st.job?.status === 'running'; i++) {
+      await new Promise((r) => setTimeout(r, 100))
+      st = await worker.request('repo.state', {})
+    }
+    assert.equal(st.job?.kind, 'tests')
+    assert.equal(st.job?.status, 'failed')
+    assert.equal(st.job?.exitCode, 7)
+    assert.ok(st.job?.tail.includes('1234'))
+    const fix = await worker.request('tests.fix', {})
+    assert.equal(fix.how, 'launched')
+    const p = host.callsOf('agent.launch')[0] as { prompt: string }
+    assert.match(p.prompt, /Exit 7/)
+    assert.match(p.prompt, /1234/)
+    await worker.request('job.dismiss', {})
+    assert.equal((await worker.request('repo.state', {})).job, null)
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('K12: a probe merge answers at once and reports conflicts without touching the workspace', async () => {
+  const dir = divergentRepo()
+  const host = mockHost({ results: hostResults(dir) })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    const before = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' })
+    assert.deepEqual(await worker.request('merge.probe', { source: 'feature' }), { started: true })
+    let st = await worker.request('repo.state', {})
+    for (let i = 0; i < 100 && st.job?.status === 'running'; i++) {
+      await new Promise((r) => setTimeout(r, 100))
+      st = await worker.request('repo.state', {})
+    }
+    assert.equal(st.job?.kind, 'probe')
+    assert.equal(st.job?.status, 'conflicts')
+    assert.deepEqual(st.job?.conflicts, ['a.txt'])
+    assert.equal(st.merge, null, 'no merge started in the workspace')
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }), before)
   } finally {
     await worker.deactivate()
   }

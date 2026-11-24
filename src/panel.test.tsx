@@ -6,6 +6,8 @@ import type { Comparison, RepoState } from './types'
 const base: RepoState = {
   workspace: { id: 'ws', name: 'main', path: '/x', supported: true, hostId: 'local' },
   base: 'main',
+  job: null,
+  hasTestCommand: false,
   problem: null,
   branch: 'main',
   head: 'h0',
@@ -88,6 +90,48 @@ test('K10: on the base workspace the panel lists the project workspaces; a row c
   assert.match(text, /Workspaces des Projekts · 1 bereit · 1 mit Konflikten/)
   assert.match(text, /✓ Fast-forward/)
   assert.match(text, /⚠ 1 Konflikt-Datei\(en\)/)
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('K11: red tests after a merge show the output and offer an agent fix', async () => {
+  const fixes: unknown[] = []
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => ({
+        ...base,
+        suggestedSource: '',
+        hasTestCommand: true,
+        job: {
+          kind: 'tests',
+          status: 'failed',
+          source: 'feature',
+          command: 'npm test',
+          startedAt: 0,
+          finishedAt: 1,
+          exitCode: 1,
+          message: 'Tests rot (Exit 1).',
+          tail: ['FAIL src/a.test.ts', 'expected 2, got 3'],
+          conflicts: []
+        }
+      }),
+      'watch.get': () => ({ watch: null }),
+      'overview.list': () => ({ base: 'main', rows: [] }),
+      'tests.fix': () => {
+        fixes.push(1)
+        return { how: 'launched', terminalId: 't' }
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+  const text = view.summary().join('\n') + JSON.stringify(view.tree())
+  assert.match(text, /Tests rot \(Exit 1\)\./)
+  assert.match(text, /expected 2, got 3/)
+  await view.press({ text: 'Agent repariert' })
+  await view.settled()
+  assert.equal(fixes.length, 1)
   assert.deepEqual(view.refusals, [])
   await view.unmount()
 })

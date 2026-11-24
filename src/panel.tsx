@@ -8,6 +8,7 @@ import {
   Badge,
   Button,
   Callout,
+  CodeView,
   Collapsible,
   EmptyState,
   Heading,
@@ -190,6 +191,9 @@ export function setup(ctx: PanelContext): void {
       if (reason === 'focus' || (reason === 'request' && Date.now() - lastLoadAt < ECHO_MS)) return
       const mine = read(state)?.workspace?.id
       if (!workspaceId || !mine || workspaceId === mine) void load()
+    }),
+    plugin.on('job.changed', ({ workspaceId }) => {
+      if (workspaceId === read(state)?.workspace?.id) void load()
     }),
     plugin.on('conflict.autoResolved', ({ workspaceId, path }) => {
       if (workspaceId === read(state)?.workspace?.id) {
@@ -379,6 +383,103 @@ function ModeCompare({ st }: { st: RepoState }) {
   )
 }
 
+/** K11/K12: the running or last test run / probe merge here, with the next sensible step. */
+function JobCard({ st }: { st: RepoState }) {
+  const job = st.job
+  if (!job) return null
+  const dismiss = (
+    <Button size="xs" variant="ghost" icon="close" onPress={() => act('…', () => plugin.request('job.dismiss', {}))}>
+      Ausblenden
+    </Button>
+  )
+  if (job.status === 'running') {
+    return (
+      <Callout tone="accent" icon="activity" title={job.message}>
+        <Row gap="xs" align="center" wrap>
+          <Text size="xs" muted>
+            {'gestartet '}
+            <RelativeTime at={job.startedAt} />
+          </Text>
+          <Button size="xs" variant="ghost" tone="danger" onPress={() => act('Breche ab …', () => plugin.request('job.cancel', {}))}>
+            Abbrechen
+          </Button>
+        </Row>
+      </Callout>
+    )
+  }
+  if (job.status === 'conflicts') {
+    return (
+      <Callout tone="warning" icon="warning" title={job.message}>
+        <Stack gap="xs">
+          <Text size="xs">{job.conflicts.slice(0, 10).join(', ') + (job.conflicts.length > 10 ? ' …' : '')}</Text>
+          <Text size="xs" muted>Dein Arbeitsbaum ist unverändert. Ein echter Merge stoppt bei diesen Dateien.</Text>
+          {dismiss}
+        </Stack>
+      </Callout>
+    )
+  }
+  if (job.status === 'passed' || job.status === 'clean') {
+    const probeReady = job.kind === 'probe' && job.source && !st.merge
+    return (
+      <Callout tone="success" icon="check" title={job.message}>
+        <Row gap="xs" wrap>
+          {probeReady ? (
+            <Button
+              size="xs"
+              tone="accent"
+              icon="branch"
+              onPress={async () => {
+                await compare(job.source!)
+                set(confirm, 'merge')
+              }}
+            >
+              Jetzt echt mergen
+            </Button>
+          ) : null}
+          {dismiss}
+        </Row>
+      </Callout>
+    )
+  }
+  // failed or error
+  const red = job.status === 'failed'
+  return (
+    <Callout tone="danger" icon="error" title={job.message}>
+      <Stack gap="xs">
+        {job.tail.length ? <CodeView label="Letzte Ausgabe" code={job.tail.join('\n')} maxHeight="sm" wrap /> : null}
+        <Row gap="xs" wrap>
+          {red && job.kind === 'tests' ? (
+            <Button
+              size="xs"
+              icon="agent"
+              onPress={async () => {
+                const r = await run('Starte Agent …', () => plugin.request('tests.fix', {}))
+                if (r) set(notice, { tone: 'success', text: 'Agent gestartet: er sucht die Ursache und committet eine Korrektur.' })
+              }}
+            >
+              Agent repariert
+            </Button>
+          ) : null}
+          {job.command ? (
+            <Button size="xs" variant="outline" icon="terminal" onPress={() => void run('Öffne Terminal …', () => plugin.request('tests.terminal', {}))}>
+              Im Terminal ansehen
+            </Button>
+          ) : null}
+          {job.kind === 'tests' ? (
+            <Button size="xs" variant="ghost" icon="refresh" onPress={() => act('Starte Tests …', () => plugin.request('tests.run', {}))}>
+              Erneut
+            </Button>
+          ) : null}
+          {dismiss}
+        </Row>
+        {red && job.kind === 'tests' && st.lastMerge ? (
+          <Text size="xs" muted>Oder oben „Merge rückgängig“, wenn der Merge selbst das Problem ist.</Text>
+        ) : null}
+      </Stack>
+    </Callout>
+  )
+}
+
 /** K10: every workspace of the project as seen from the base; Enter or a double click compares it. */
 function OverviewSection() {
   const o = read(overview)
@@ -519,6 +620,18 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
         <Input label="Commit-Nachricht (optional)" value={read(message)} placeholder="Standard von Git" onChange={(v) => set(message, v)} />
       ) : null}
       {blockedBy ? <Text size="xs" tone="warning">{blockedBy}</Text> : null}
+      <Button
+        variant="outline"
+        icon="play"
+        disabled={working || st.job?.status === 'running'}
+        tooltip={`Merged ${src} in einem temporären Worktree${st.hasTestCommand ? ' und lässt dort die Tests laufen' : ''}. Hier ändert sich nichts.`}
+        onPress={async () => {
+          const r = await run('Starte Probe-Merge …', () => plugin.request('merge.probe', { source: src }))
+          if (r) void load()
+        }}
+      >
+        {st.hasTestCommand ? 'Probe-Merge mit Tests' : 'Probe-Merge'}
+      </Button>
       {conf === 'merge' ? (
         <Callout tone="accent" title={`${src} → ${st.branch} mergen?`}>
           <Stack gap="xs">
@@ -714,6 +827,7 @@ export default function Panel() {
       <Header st={st} />
       {n ? <Callout tone={n.tone}>{n.text}</Callout> : null}
       {b ? <Text muted size="xs">{b}</Text> : null}
+      <JobCard st={st} />
       {st.merge ? <ModeResolve st={st} /> : <ModeCompare st={st} />}
       <Text muted size="xs">{`Merge & Review ${VERSION}`}</Text>
     </Stack>
