@@ -11,7 +11,7 @@ import type {
   ConflictChoice,
   RepoState
 } from '../types.ts'
-import { git, GitError, type GitRunner } from '../git/runner.ts'
+import { git, GitError, LONG_RUNNING_MS, type GitRunner, type RunOptions } from '../git/runner.ts'
 import { conflictsOf, displayLines, parseConflicts, resolveConflict } from './conflicts.ts'
 
 export interface FileAccess {
@@ -23,7 +23,7 @@ export interface FileAccess {
 }
 
 /** What Git alone can say about a repository; the worker adds workspace and source data. */
-export type CoreState = Pick<RepoState, 'problem' | 'branch' | 'branches' | 'dirtyFiles' | 'merge'>
+export type CoreState = Pick<RepoState, 'problem' | 'branch' | 'head' | 'branches' | 'dirtyFiles' | 'merge'>
 
 /** A refusal meant for the person (bad input, wrong state), not a Git failure. */
 export class UserError extends Error {
@@ -52,33 +52,44 @@ export class Repo {
     return new Repo(runner, files, top.stdout.trim())
   }
 
-  private git(args: readonly string[], ok?: readonly number[]) {
-    return git(this.runner, this.root, args, ok)
+  private git(args: readonly string[], ok?: readonly number[], options?: RunOptions) {
+    return git(this.runner, this.root, args, ok, options)
+  }
+
+  /** Merge and commit run the repository's Git hooks, which may take minutes. */
+  private long(args: readonly string[], ok?: readonly number[]) {
+    return this.git(args, ok, { timeoutMs: LONG_RUNNING_MS })
   }
 
   // ---------------------------------------------------------------- state
 
-  async state(): Promise<CoreState> {
-    const [branch, branches, unmerged, mergeHead] = await Promise.all([
+  async state(known?: { local: string[]; remote: string[] }): Promise<CoreState> {
+    const [branch, refs, merge, head] = await Promise.all([
       this.currentBranch(),
-      this.branches(),
-      this.unmerged(),
-      this.mergeHead()
+      known ?? this.refs(),
+      this.mergeSummary(),
+      this.git(['rev-parse', '-q', '--verify', 'HEAD'], [0, 1, 128]).then((r) => (r.code === 0 ? r.stdout.trim() : null))
     ])
-    const merging = mergeHead !== null || unmerged.length > 0 || (await this.squashPending())
-    const merge = merging
-      ? {
-          source: mergeHead ? await this.describe(mergeHead) : 'Squash-Merge',
-          conflicts: unmerged,
-          markerFree: await this.markerFree(unmerged)
-        }
-      : null
+    const merging = merge !== null
     return {
       problem: null,
       branch,
-      branches,
-      dirtyFiles: merging ? [] : await this.dirtyFiles(),
+      head,
+      branches: [...refs.local, ...refs.remote],
+      // Only tracked changes block a merge; Git itself refuses if an untracked file is in the way.
+      dirtyFiles: merging ? [] : await this.dirtyFiles(true),
       merge
+    }
+  }
+
+  /** Only the merge part of `state()`: cheap enough to poll (two or three Git calls outside a merge). */
+  async mergeSummary(): Promise<CoreState['merge']> {
+    const [unmerged, mergeHead] = await Promise.all([this.unmerged(), this.mergeHead()])
+    if (mergeHead === null && unmerged.length === 0 && !(await this.squashPending())) return null
+    return {
+      source: mergeHead ? await this.describe(mergeHead) : 'Squash-Merge',
+      conflicts: unmerged,
+      markerFree: await this.markerFree(unmerged)
     }
   }
 
@@ -113,8 +124,8 @@ export class Repo {
   }
 
   /** The project's base branch: the remote's default branch, else main/master/develop; null if none. */
-  async baseBranch(): Promise<string | null> {
-    const { local, remote } = await this.refs()
+  async baseBranch(known?: { local: string[]; remote: string[] }): Promise<string | null> {
+    const { local, remote } = known ?? (await this.refs())
     const head = await this.git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], [0, 1, 128])
     if (head.code === 0) {
       const name = head.stdout.trim() // e.g. origin/main
@@ -195,7 +206,8 @@ export class Repo {
       const entry = parts[i]
       if (!entry) continue
       out.push(entry.slice(3))
-      if (entry[0] === 'R' || entry[0] === 'C') i++ // the old path follows a rename
+      // The old path follows a rename or copy, staged (X) or in the worktree (Y).
+      if ('RC'.includes(entry[0]) || 'RC'.includes(entry[1])) i++
     }
     return out
   }
@@ -218,24 +230,25 @@ export class Repo {
 
   async compare(source: string, target = 'HEAD'): Promise<Comparison> {
     const [src, tgt] = await Promise.all([this.verify(source), this.verify(target)])
-    const mergeBase = await this.mergeBase(tgt, src)
-    const [incoming, behind, files, preview] = await Promise.all([
-      this.commits(`${tgt}..${src}`),
-      this.count(`${src}..${tgt}`),
+    const [mergeBase, counts] = await Promise.all([this.mergeBase(tgt, src), this.aheadBehind(tgt, src)])
+    const [incoming, files, preview] = await Promise.all([
+      counts.ahead ? this.commits(`${tgt}..${src}`) : Promise.resolve([]),
       this.changedFiles(mergeBase ?? tgt, src),
-      this.preview(tgt, src)
+      this.preview(tgt, src, counts, mergeBase !== null)
     ])
-    return { source, target, mergeBase, incoming, behind, files, preview }
+    return { source, target, mergeBase, incoming, ahead: counts.ahead, behind: counts.behind, files, preview }
+  }
+
+  /** Commits only `source` has (ahead) and only `target` has (behind), in one Git call. */
+  async aheadBehind(target: string, source: string): Promise<{ ahead: number; behind: number }> {
+    const r = await this.git(['rev-list', '--left-right', '--count', `${target}...${source}`])
+    const [behind, ahead] = r.stdout.trim().split(/\s+/).map((n) => Number(n) || 0)
+    return { ahead: ahead ?? 0, behind: behind ?? 0 }
   }
 
   private async mergeBase(a: string, b: string): Promise<string | null> {
     const r = await this.git(['merge-base', a, b], [0, 1])
     return r.code === 0 ? r.stdout.trim() : null
-  }
-
-  private async count(range: string): Promise<number> {
-    const r = await this.git(['rev-list', '--count', range])
-    return Number(r.stdout.trim()) || 0
   }
 
   private async commits(range: string): Promise<CommitRow[]> {
@@ -269,13 +282,18 @@ export class Repo {
   }
 
   /** Predicts the merge with `git merge-tree --write-tree`: touches no file and no ref. */
-  async preview(target: string, source: string): Promise<MergePreview> {
-    const [ahead, behind] = await Promise.all([
-      this.count(`${target}..${source}`),
-      this.count(`${source}..${target}`)
-    ])
+  async preview(
+    target: string,
+    source: string,
+    known?: { ahead: number; behind: number },
+    related?: boolean
+  ): Promise<MergePreview> {
+    const { ahead, behind } = known ?? (await this.aheadBehind(target, source))
     if (ahead === 0) return { clean: true, conflicts: [], upToDate: true, fastForward: false }
     if (behind === 0) return { clean: true, conflicts: [], upToDate: false, fastForward: true }
+    if (related === false || (related === undefined && (await this.mergeBase(target, source)) === null)) {
+      return { clean: null, conflicts: [], upToDate: false, fastForward: false, unrelated: true }
+    }
     const r = await this.git(
       ['merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', target, source],
       [0, 1, 128, 129]
@@ -291,10 +309,12 @@ export class Repo {
     return { clean: r.code === 0, conflicts, upToDate: false, fastForward: false }
   }
 
-  async fileDiff(source: string, path: string, target = 'HEAD') {
+  /** The patch of one file; `from` is its old path when it was renamed, so Git can pair them. */
+  async fileDiff(source: string, path: string, target = 'HEAD', from?: string) {
     const [src, tgt] = await Promise.all([this.verify(source), this.verify(target)])
     const base = (await this.mergeBase(tgt, src)) ?? tgt
-    const r = await this.git(['diff', '-M', '--no-color', base, src, '--', checkPath(path)])
+    const paths = from && from !== path ? [checkPath(from), checkPath(path)] : [checkPath(path)]
+    const r = await this.git(['diff', '-M', '--no-color', base, src, '--', ...paths])
     const truncated = r.stdout.length > MAX_PATCH
     return { patch: truncated ? r.stdout.slice(0, MAX_PATCH) : r.stdout, truncated }
   }
@@ -329,13 +349,14 @@ export class Repo {
     // diff3 writes the common ancestor into each conflict block, so the review tab can show it.
     const args = options.showBase ? ['-c', 'merge.conflictStyle=diff3', 'merge'] : ['merge']
     if (mode === 'no-ff') args.push('--no-ff', '--no-edit')
-    if (mode === 'ff') args.push('--no-edit')
+    // Explicit, so `merge.ff` in the user's config cannot turn the choice into something else.
+    if (mode === 'ff') args.push('--ff', '--no-edit')
     if (mode === 'ff-only') args.push('--ff-only')
     if (mode === 'squash') args.push('--squash')
     if (msg && (mode === 'ff' || mode === 'no-ff')) args.push('-m', msg)
     args.push('--end-of-options', source)
 
-    const r = await this.git(args, [0, 1, 128])
+    const r = await this.long(args, [0, 1, 128])
     const conflicts = await this.unmerged()
     if (conflicts.length) {
       return {
@@ -355,7 +376,7 @@ export class Repo {
       if (staged.code === 0) {
         return { status: 'up-to-date', message: 'Squash brachte keine Änderungen.', conflicts: [] }
       }
-      await this.git(['commit', '-m', msg || `Squash-Merge von ${source}`])
+      await this.long(['commit', '-m', msg || `Squash-Merge von ${source}`])
       return { status: 'squashed', message: `${source} als ein Commit übernommen.`, conflicts: [] }
     }
     return { status: 'merged', message: `${source} gemergt.`, conflicts: [] }
@@ -402,7 +423,7 @@ export class Repo {
       throw new UserError(`Noch ${left.length} ungelöste Datei(en): ${left.slice(0, 5).join(', ')}`)
     }
     const msg = message?.trim()
-    await this.git(msg ? ['commit', '-m', msg] : ['commit', '--no-edit'])
+    await this.long(msg ? ['commit', '-m', msg] : ['commit', '--no-edit'])
     return (await this.git(['rev-parse', 'HEAD'])).stdout.trim()
   }
 
@@ -445,11 +466,26 @@ export class Repo {
     }
   }
 
-  async resolveHunk(path: string, index: number, choice: ConflictChoice): Promise<ConflictFile> {
+  /**
+   * Replaces block `index` with `choice`. With `expect` (the sides as the person saw them) it
+   * refuses when that block changed meanwhile, e.g. because an agent edited the file.
+   */
+  async resolveHunk(
+    path: string,
+    index: number,
+    choice: ConflictChoice,
+    expect?: { ours: string; theirs: string }
+  ): Promise<ConflictFile> {
     const rel = await this.requireUnmerged(path)
     const abs = this.files.join(this.root, rel)
     const text = await this.files.read(abs)
     if (text === null) throw new UserError(`"${rel}" gibt es im Arbeitsbaum nicht.`)
+    if (expect) {
+      const block = conflictsOf(parseConflicts(text))[index]
+      if (!block || displayLines(block.ours) !== expect.ours || displayLines(block.theirs) !== expect.theirs) {
+        throw new UserError(`"${rel}" hat sich inzwischen geändert. Die Ansicht wurde neu geladen; bitte erneut wählen.`)
+      }
+    }
     try {
       await this.files.write(abs, resolveConflict(text, index, choice))
     } catch (e) {

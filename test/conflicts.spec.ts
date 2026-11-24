@@ -38,6 +38,13 @@ test('keeps CRLF line endings', () => {
   assert.equal(out, 'kopf\r\nmeins 1\r\nmitte\r\ndeins 2\r\nfuss\r\n')
 })
 
+test('a block with empty sides keeps the file CRLF when another block is resolved', () => {
+  const crlf = ['kopf', '<<<<<<< HEAD', 'meins', '=======', 'deins', '>>>>>>> f', '<<<<<<< HEAD', '=======', '>>>>>>> f', 'fuss', '']
+    .join('\r\n')
+  const out = resolveConflict(crlf, 0, 'ours')
+  assert.equal(out, ['kopf', 'meins', '<<<<<<< HEAD', '=======', '>>>>>>> f', 'fuss', ''].join('\r\n'))
+})
+
 test('diff3 base section, label kept on re-render', () => {
   const d3 = [
     '<<<<<<< HEAD\n', 'a\n', '||||||| base\n', 'o\n', '=======\n', 'b\n', '>>>>>>> x\n',

@@ -184,3 +184,101 @@ test('a squash with resolved conflicts stays visible until it is committed', () 
     assert.equal((await s.git('log', '-1', '--format=%s')).trim(), 'Feature gesquasht')
     assert.equal((await s.repo.state()).merge, null)
   }))
+
+test('paths are literal: resolving src/[id].ts never touches src/i.ts', () =>
+  withSandbox(async (s) => {
+    await s.git('checkout', '--quiet', '-b', 'feature')
+    await s.commit('f', { '[id].txt': 'F1\n', 'i.txt': 'F2\n' })
+    await s.git('checkout', '--quiet', 'main')
+    await s.commit('m', { '[id].txt': 'M1\n', 'i.txt': 'M2\n' })
+    await s.repo.merge('feature', 'no-ff')
+    await s.repo.resolveHunk('[id].txt', 0, 'ours')
+    await s.repo.markResolved('[id].txt')
+    assert.deepEqual(await s.repo.unmerged(), ['i.txt'], 'i.txt must still be unmerged')
+    await s.repo.takeFile('i.txt', 'theirs')
+    assert.equal(await s.read('[id].txt'), 'M1\n')
+  }))
+
+test('a renamed file diffs against its old path', () =>
+  withSandbox(async (s) => {
+    const body = Array.from({ length: 30 }, (_, i) => `zeile ${i}\n`).join('')
+    await s.commit('base', { 'old.txt': body })
+    await s.git('checkout', '--quiet', '-b', 'feature')
+    await s.git('mv', 'old.txt', 'new.txt')
+    await s.commit('rename', { 'new.txt': body.replace('zeile 3\n', 'ZEILE 3\n') })
+    await s.git('checkout', '--quiet', 'main')
+    const cmp = await s.repo.compare('feature')
+    const f = cmp.files.find((x) => x.path === 'new.txt')!
+    assert.equal(f.from, 'old.txt')
+    const { patch } = await s.repo.fileDiff('feature', f.path, 'HEAD', f.from)
+    assert.match(patch, /rename from old\.txt/)
+    assert.doesNotMatch(patch, /new file mode/)
+  }))
+
+test('untracked files do not block a merge; the real commit count is reported', () =>
+  withSandbox(async (s) => {
+    await divergent(s)
+    await s.write('scratch.tmp', 'x\n')
+    assert.deepEqual((await s.repo.state()).dirtyFiles, [])
+    const cmp = await s.repo.compare('feature')
+    assert.equal(cmp.ahead, 1)
+    assert.equal(cmp.behind, 1)
+  }))
+
+test('"ff" mode fast-forwards even when merge.ff=false is configured', () =>
+  withSandbox(async (s) => {
+    await s.git('checkout', '--quiet', '-b', 'feature')
+    await s.commit('f', { 'b.txt': 'b\n' })
+    await s.git('checkout', '--quiet', 'main')
+    await s.git('config', 'merge.ff', 'false')
+    await s.repo.merge('feature', 'ff')
+    assert.equal((await s.git('rev-parse', 'HEAD')).trim(), (await s.git('rev-parse', 'feature')).trim())
+  }))
+
+test('unrelated histories are reported as such', () =>
+  withSandbox(async (s) => {
+    await s.git('checkout', '--quiet', '--orphan', 'other')
+    await s.git('rm', '-rf', '--quiet', '.')
+    await s.commit('other root', { 'z.txt': 'z\n' })
+    await s.git('checkout', '--quiet', 'main')
+    await s.commit('main more', { 'a.txt': 'neu\n' })
+    const cmp = await s.repo.compare('other')
+    assert.equal(cmp.mergeBase, null)
+    assert.equal(cmp.preview.unrelated, true)
+    assert.equal(cmp.preview.clean, null)
+  }))
+
+test('resolveHunk refuses when the block changed since it was shown', () =>
+  withSandbox(async (s) => {
+    await divergent(s)
+    await s.repo.merge('feature', 'no-ff')
+    const shown = (await s.repo.conflict('a.txt')).hunks[0]
+    const text = await s.read('a.txt')
+    await s.write('a.txt', text.replace('ZWEI-feature', 'ZWEI-agent'))
+    await assert.rejects(
+      s.repo.resolveHunk('a.txt', 0, 'ours', { ours: shown.ours, theirs: shown.theirs }),
+      /inzwischen geändert/
+    )
+    const fresh = (await s.repo.conflict('a.txt')).hunks[0]
+    await s.repo.resolveHunk('a.txt', 0, 'theirs', { ours: fresh.ours, theirs: fresh.theirs })
+    assert.equal(await s.read('a.txt'), 'eins\nZWEI-agent\ndrei\n')
+  }))
+
+test('resolving a block keeps the bytes of a file that is not UTF-8 (Windows-1252)', () =>
+  withSandbox(async (s) => {
+    const { writeFile, readFile } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const cp1252 = (t: string) => Buffer.from(t, 'latin1') // ä ö ü ß are single bytes here
+    await writeFile(join(s.dir, 'w.txt'), cp1252('Grüße\nzwei\nEnde\n'))
+    await s.git('add', 'w.txt')
+    await s.git('commit', '--quiet', '-m', 'w')
+    await s.git('checkout', '--quiet', '-b', 'feature')
+    await writeFile(join(s.dir, 'w.txt'), cp1252('Grüße\nzwei-Fäden\nEnde\n'))
+    await s.git('commit', '--quiet', '-am', 'f')
+    await s.git('checkout', '--quiet', 'main')
+    await writeFile(join(s.dir, 'w.txt'), cp1252('Grüße\nzwei-Möhre\nEnde\n'))
+    await s.git('commit', '--quiet', '-am', 'm')
+    await s.repo.merge('feature', 'no-ff')
+    await s.repo.resolveHunk('w.txt', 0, 'theirs')
+    assert.deepEqual(await readFile(join(s.dir, 'w.txt')), cp1252('Grüße\nzwei-Fäden\nEnde\n'))
+  }))

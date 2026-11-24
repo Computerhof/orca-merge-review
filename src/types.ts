@@ -60,8 +60,10 @@ export interface RepoState {
   /** Why the panel cannot work here, in words for the person; null when it can. */
   problem: string | null
   branch: string | null
+  /** The commit HEAD points at; null in an empty repository. Lets the panel notice the branch moved. */
+  head: string | null
   branches: string[]
-  /** Changed or untracked files in the working tree (outside an ongoing merge). */
+  /** Tracked files with uncommitted changes (outside an ongoing merge); they block a merge. */
   dirtyFiles: string[]
   merge: MergeInProgress | null
   /** Orca workspaces of the same project first, then other branches and remotes. */
@@ -94,8 +96,10 @@ export interface Comparison {
   source: string
   target: string
   mergeBase: string | null
-  /** Commits on source that target lacks (what a merge brings in), newest first. */
+  /** Commits on source that target lacks (what a merge brings in), newest first; at most 200. */
   incoming: CommitRow[]
+  /** How many commits source has that target lacks (the real number; `incoming` may be cut). */
+  ahead: number
   /** How many commits target has that source lacks. */
   behind: number
   files: FileChange[]
@@ -103,8 +107,10 @@ export interface Comparison {
 }
 
 export interface MergePreview {
-  /** False when the merge would stop with conflicts. Null when Git is too old for merge-tree. */
+  /** False when the merge would stop with conflicts. Null when it cannot be predicted (Git older than 2.38, or `unrelated`). */
   clean: boolean | null
+  /** True when source and target share no history; Git refuses to merge them. */
+  unrelated?: boolean
   conflicts: string[]
   /** True when target already contains source (nothing to merge). */
   upToDate: boolean

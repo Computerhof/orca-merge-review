@@ -49,6 +49,10 @@ let selected: string | null = null
 let conflict: ConflictFile | null = null
 let message: { tone: 'ok' | 'warn' | 'err'; text: string } | null = null
 let loading = false
+/** Bumped by every reload and selection; an answer for an older one is dropped. */
+let seq = 0
+/** A conflict action is in flight: keys and buttons wait instead of acting on a stale view. */
+let busy = false
 
 const ws = () => defined({ workspaceId: ticket?.workspaceId })
 
@@ -64,27 +68,39 @@ async function call<T>(fn: () => Promise<T>): Promise<T | undefined> {
 
 // ------------------------------------------------------------------ loading
 
+/** When the tab last reloaded on its own; the worker's echo of its action right after is skipped. */
+let lastReloadAt = 0
+
 async function reload(): Promise<void> {
   if (!ticket) return
+  lastReloadAt = Date.now()
+  const my = ++seq
+  const t = ticket
   loading = true
   render()
-  repo = (await call(() => orca.plugin.request('repo.state', ws(), { timeoutMs: 20_000 }))) ?? null
-  const merging = !!repo?.merge
-  if (merging) {
+  const nextRepo = (await call(() => orca.plugin.request('repo.state', ws(), { timeoutMs: 20_000 }))) ?? null
+  if (my !== seq) return
+  repo = nextRepo
+  if (repo?.merge) {
     cmp = null
-    const files = repo!.merge!.conflicts
+    const files = repo.merge.conflicts
     if (!selected || !files.includes(selected)) {
-      selected = ticket.view === 'conflict' && files.includes(ticket.path) ? ticket.path : (firstOpen() ?? files[0] ?? null)
+      selected = t.view === 'conflict' && files.includes(t.path) ? t.path : (firstOpen() ?? files[0] ?? null)
     }
-    conflict = selected ? ((await call(() => orca.plugin.request('conflict.get', { ...ws(), path: selected! }))) ?? null) : null
+    const path = selected
+    const next = path ? ((await call(() => orca.plugin.request('conflict.get', { ...ws(), path }))) ?? null) : null
+    if (my !== seq) return
+    conflict = next
   } else {
     conflict = null
-    const src = ticket.view === 'conflict' ? null : (ticket.source ?? repo?.suggestedSource ?? null)
-    cmp = src ? ((await call(() => orca.plugin.request('repo.compare', { ...ws(), source: src }))) ?? null) : null
-    if (ticket.view === 'diff' && !selected) selected = ticket.path
+    const src = t.view === 'conflict' ? null : (t.source ?? repo?.suggestedSource ?? null)
+    const next = src ? ((await call(() => orca.plugin.request('repo.compare', { ...ws(), source: src }))) ?? null) : null
+    if (my !== seq) return
+    cmp = next
+    if (t.view === 'diff' && !selected) selected = t.path
     if (cmp && (!selected || !cmp.files.some((f) => f.path === selected))) selected = cmp.files[0]?.path ?? null
     patchRows = null
-    if (cmp && selected) await loadPatch()
+    if (cmp && selected && !(await loadPatch(my))) return
   }
   loading = false
   render()
@@ -97,39 +113,78 @@ function firstOpen(): string | null {
 
 let patchRows: ReturnType<typeof sideBySide> | null = null
 let patchTruncated = false
-async function loadPatch(): Promise<void> {
-  if (!cmp || !selected) return
-  const r = await call(() => orca.plugin.request('repo.fileDiff', { ...ws(), source: cmp!.source, path: selected! }))
+/** Loads the selected file's patch; false when a newer reload or selection took over meanwhile. */
+async function loadPatch(my: number): Promise<boolean> {
+  if (!cmp || !selected) return true
+  const file = cmp.files.find((f) => f.path === selected)
+  const r = await call(() =>
+    orca.plugin.request('repo.fileDiff', defined({ ...ws(), source: cmp!.source, path: selected!, from: file?.from }))
+  )
+  if (my !== seq) return false
   patchRows = r ? sideBySide(r.patch) : null
   patchTruncated = !!r?.truncated
+  return true
 }
 
 async function select(path: string): Promise<void> {
+  if (busy) return
+  const my = ++seq
   selected = path
   message = null
   if (repo?.merge) {
-    conflict = (await call(() => orca.plugin.request('conflict.get', { ...ws(), path }))) ?? null
+    conflict = null
+    render()
+    const next = (await call(() => orca.plugin.request('conflict.get', { ...ws(), path }))) ?? null
+    if (my !== seq) return
+    conflict = next
   } else {
     patchRows = null
     render()
-    await loadPatch()
+    if (!(await loadPatch(my))) return
   }
   render()
 }
 
+/** Runs one conflict action at a time, against the file that is on screen. */
+async function exclusive(fn: () => Promise<void>): Promise<void> {
+  if (busy) return
+  busy = true
+  try {
+    await fn()
+  } finally {
+    busy = false
+  }
+}
+
 // ------------------------------------------------------------------ actions
 
-async function resolve(index: number, choice: ConflictChoice): Promise<void> {
-  if (!selected) return
-  const r = await call(() => orca.plugin.request('conflict.resolveHunk', { ...ws(), path: selected!, index, choice }))
-  if (!r) return
-  conflict = r
-  if (r.markerFree) message = { tone: 'ok', text: 'Keine Marker mehr in dieser Datei. Als gelöst markieren?' }
-  render()
+async function resolve(h: ConflictHunk, choice: ConflictChoice): Promise<void> {
+  const shown = conflict
+  if (!shown || shown.path !== selected) return
+  await exclusive(async () => {
+    // `expect` lets the worker refuse if the block changed meanwhile (an agent editing the file).
+    const r = await call(() =>
+      orca.plugin.request('conflict.resolveHunk', {
+        ...ws(),
+        path: shown.path,
+        index: h.index,
+        choice,
+        expect: { ours: h.ours, theirs: h.theirs }
+      })
+    )
+    if (!r) {
+      await reload() // e.g. the block changed under us: show the file as it is now
+      return
+    }
+    if (selected !== shown.path) return
+    conflict = r
+    if (r.markerFree) message = { tone: 'ok', text: 'Keine Marker mehr in dieser Datei. Als gelöst markieren?' }
+    render()
+  })
 }
 
 async function markResolved(): Promise<void> {
-  if (!selected) return
+  if (!selected || busy) return
   const ok = await call(() => orca.plugin.request('conflict.markResolved', { ...ws(), path: selected! }))
   if (!ok) return
   message = { tone: 'ok', text: `${selected} ist gelöst.` }
@@ -138,7 +193,7 @@ async function markResolved(): Promise<void> {
 }
 
 async function takeFile(side: 'ours' | 'theirs'): Promise<void> {
-  if (!selected) return
+  if (!selected || busy) return
   const ok = await call(() => orca.plugin.request('conflict.takeFile', { ...ws(), path: selected!, side }))
   if (!ok) return
   message = { tone: 'ok', text: `${selected}: ${side === 'ours' ? 'dein Stand' : 'eingehende Fassung'} übernommen.` }
@@ -230,7 +285,7 @@ function sidebar(): HTMLElement {
     const delta = f.added === null ? 'bin' : `+${f.added} −${f.deleted}`
     list.append(fileItem(f.path, f.status, warn ? 'warn' : '', delta))
   }
-  list.append(el('div', { class: 'group' }, `Commits (${cmp.incoming.length})`))
+  list.append(el('div', { class: 'group' }, `Commits (${cmp.ahead})`))
   for (const c of cmp.incoming.slice(0, 100)) {
     list.append(el('div', { class: 'commit', title: `${c.author} · ${new Date(c.at).toLocaleString()}` }, el('code', {}, c.short), text(' ' + c.subject)))
   }
@@ -367,10 +422,10 @@ function hunkCard(h: ConflictHunk, total: number, ours: string, theirs: string):
     el(
       'div',
       { class: 'row' },
-      button('Meins (1)', () => void resolve(h.index, 'ours')),
-      button('Eingehend (2)', () => void resolve(h.index, 'theirs')),
-      button('Beide (3)', () => void resolve(h.index, 'both')),
-      h.base !== null ? button('Basis', () => void resolve(h.index, 'base')) : null
+      button('Meins (1)', () => void resolve(h, 'ours')),
+      button('Eingehend (2)', () => void resolve(h, 'theirs')),
+      button('Beide (3)', () => void resolve(h, 'both')),
+      h.base !== null ? button('Basis', () => void resolve(h, 'base')) : null
     )
   )
 }
@@ -389,7 +444,7 @@ document.addEventListener('keydown', (e) => {
     const choice = ({ '1': 'ours', '2': 'theirs', '3': 'both' } as const)[e.key as '1' | '2' | '3']
     if (choice) {
       e.preventDefault()
-      void resolve(conflict.hunks[0].index, choice)
+      void resolve(conflict.hunks[0], choice)
       return
     }
   }
@@ -427,7 +482,8 @@ async function start(): Promise<void> {
   }
   doc.onReplace(apply)
   apply(doc.value)
-  orca.plugin.on('repo.changed', ({ workspaceId }) => {
+  orca.plugin.on('repo.changed', ({ workspaceId, reason }) => {
+    if (reason === 'request' && Date.now() - lastReloadAt < 2500) return
     if (!workspaceId || workspaceId === ticket?.workspaceId) void reload()
   })
 }

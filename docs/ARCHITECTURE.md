@@ -15,7 +15,8 @@ src/
     prompts.ts          Texte für Agenten (Review-Anmerkung, Konfliktauftrag, Merge-Wächter)
   git/                  ── austauschbare Anbindung ──
     runner.ts           GitRunner-Schnittstelle + LocalGitRunner (execFile, keine Shell)
-    files.ts            FileAccess auf das lokale Dateisystem
+    files.ts            FileAccess auf das lokale Dateisystem (UTF-8, sonst verlustfrei latin1)
+    mergeMarkers.ts     „Läuft hier ein Merge?“ synchron aus MERGE_HEAD/SQUASH_MSG, für Hooks
   worker.ts             Nur Verdrahtung: Handler, Events, Hooks, Befehle
   worker/
     workspaces.ts       Orca-Workspace → Repo; Quellen (Geschwister-Workspaces, Branches, Remotes)
@@ -39,7 +40,10 @@ scripts/check-private.mjs  Privacy-/Secret-Guard (Hook + CI)
 1. Panel/Tab → `plugin.request(name, input)` → Worker-Handler → `Workspaces.resolve()` (Orca-Workspace → Pfad) → `Repo` (Git).
 2. Nach jeder schreibenden Aktion plant der `Monitor` eine Auffrischung: Er aktualisiert die Status-Leiste und sendet `repo.changed` an alle offenen Panels und Tabs.
 3. Auffrischung auch bei Workspace-Fokus (`workspace.changed`), Git-Befehlen von Agenten (`agent.tool.after`), Speichern während eines Merges (`editor.save.before`) und alle 20 s für den fokussierten Workspace.
-4. Der Hook `agent.tool.before` entscheidet synchron aus dem Monitor-Cache (Orca gibt Hooks 2 s).
+4. Der Hook `agent.tool.before` entscheidet synchron (Orca gibt Hooks 2 s): Er bildet Orcas Hook-Kennung
+   (`repoId::Pfad`) über die zuletzt geladene Workspace-Liste auf die `workspace.list`-ID ab und prüft Gits
+   Markerdateien direkt im Arbeitsbaum, ohne Git zu starten.
+5. Git läuft immer mit `--literal-pathspecs`; Pfade aus dem Panel sind nie Muster.
 
 ## Austauschbarkeit
 

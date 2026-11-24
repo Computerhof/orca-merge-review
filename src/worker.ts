@@ -12,12 +12,15 @@ import { SettingsCache } from './worker/settings.ts'
 import { Workspaces } from './worker/workspaces.ts'
 
 let monitor: Monitor | null = null
+let pendingSends: PendingSends | null = null
 
 export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const workspaces = new Workspaces(orca, new LocalGitRunner())
   const memory = new Memory(orca)
   const settings = new SettingsCache()
   const pending = new PendingSends(orca)
+  pendingSends = pending
+  void workspaces.list().catch(() => {}) // hooks map workspace ids synchronously from this listing
   monitor = new Monitor(orca, workspaces)
   const mon = monitor
 
@@ -52,7 +55,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     if (!settings.current.guardAgents) return
     const command = commandOf(e.input)
     if (!command) return
-    const deny = guardDecision(command, { merging: mon.isMerging(e.workspaceId) })
+    const deny = guardDecision(command, { merging: mon.isMerging(workspaces.canonical(e.workspaceId)) })
     if (deny) {
       orca.log(`guard: refused "${command.slice(0, 120)}"`)
       return { deny }
@@ -61,11 +64,12 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
 
   orca.hooks.on('agent.tool.after', (e) => {
     const command = commandOf(e.input)
-    if (command && runsGit(command)) mon.schedule(e.workspaceId, 'agent-git')
+    if (command && runsGit(command)) mon.schedule(workspaces.canonical(e.workspaceId), 'agent-git')
   })
 
   orca.hooks.on('editor.save.before', (e) => {
-    if (mon.isMerging(e.workspaceId)) mon.schedule(e.workspaceId, 'save')
+    const id = workspaces.canonical(e.workspaceId)
+    if (mon.isMerging(id)) mon.schedule(id, 'save')
   })
 
   // --- Commands (palette, shortcuts, status bar).
@@ -114,4 +118,6 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
 export function deactivate(): void {
   monitor?.stop()
   monitor = null
+  pendingSends?.dispose()
+  pendingSends = null
 }

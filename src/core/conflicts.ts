@@ -155,6 +155,8 @@ function detectEol(lines: readonly string[]): string {
 /** Replaces conflict number `index` (0-based, in file order) with the chosen side. */
 export function resolveConflict(text: string, index: number, choice: ConflictChoice): string {
   const segments = parseConflicts(text)
+  // A block whose sides are empty has no line ending of its own; it gets the file's.
+  const fileEol = text.includes('\r\n') ? '\r\n' : '\n'
   let seen = -1
   let found = false
   const out: string[] = []
@@ -168,7 +170,7 @@ export function resolveConflict(text: string, index: number, choice: ConflictCho
       out.push(...chosenLines(segment, choice))
       found = true
     } else {
-      out.push(...renderConflict(segment))
+      out.push(...renderConflict(segment, fileEol))
     }
   }
   if (!found) throw new Error(`Konflikt ${index + 1} gibt es in dieser Datei nicht (mehr).`)
@@ -176,8 +178,9 @@ export function resolveConflict(text: string, index: number, choice: ConflictCho
 }
 
 /** Writes a conflict block back exactly as Git wrote it. */
-export function renderConflict(c: ConflictSegment): string[] {
-  const eol = detectEol([...c.ours, ...c.theirs, ...(c.base ?? [])])
+export function renderConflict(c: ConflictSegment, fallbackEol = '\n'): string[] {
+  const sides = [...c.ours, ...c.theirs, ...(c.base ?? [])]
+  const eol = sides.length ? detectEol(sides) : fallbackEol
   const head = (marker: string, label: string) => (label ? `${marker} ${label}` : marker) + eol
   return [
     head(OURS, c.oursLabel),

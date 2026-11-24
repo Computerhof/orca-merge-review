@@ -29,6 +29,8 @@ test('side-by-side pairs a deletion with the following addition', () => {
   assert.deepEqual([rows[7].rightNo, rows[7].right, rows[7].left], [3, 'neu', null])
   assert.deepEqual([rows[8].leftNo, rows[8].rightNo], [3, 4])
   assert.equal(rows[4].right, 'function x')
+  // Git ends every patch with a newline; that must not become an extra context row.
+  assert.equal(sideBySide(patch + '\n').length, rows.length)
 })
 
 test('commandOf reads the shapes agents use', () => {
@@ -71,6 +73,55 @@ test('during a merge, destructive git is refused and resolution commands pass', 
   ]) {
     assert.equal(guardDecision(ok, merging), null, `should pass: ${ok}`)
   }
+})
+
+test('the guard parses like a shell: global options, paths, quotes, nested shells', () => {
+  const merging = { merging: true }
+  for (const bad of [
+    'git -C . reset --hard',
+    'git -c x=y merge --abort',
+    'git.exe reset --hard',
+    '/usr/bin/git reset --hard',
+    '"C:\\Program Files\\Git\\cmd\\git.exe" reset --hard',
+    '& "C:\\Program Files\\Git\\cmd\\git.exe" merge --abort',
+    '"git" reset --hard',
+    'git restore :/',
+    'git checkout -f HEAD',
+    'git merge --quit',
+    'cd sub && GIT_TRACE=1 git stash push',
+    'bash -c "git reset --hard"',
+    'echo ok; (git rebase main)',
+    'git -C "a dir" checkout -b other'
+  ]) {
+    assert.ok(guardDecision(bad, merging), `should refuse: ${bad}`)
+  }
+  for (const ok of [
+    'git commit -m "docs: explain git rebase"',
+    'git log --grep "git stash"',
+    'git commit --no-edit',
+    'git checkout --ours -- a.ts',
+    'git checkout --merge a.ts',
+    'git reset --help',
+    'echo "git reset --hard" > notes.txt',
+    'orca agent launch --prompt "run git push --force somewhere"'
+  ]) {
+    assert.equal(guardDecision(ok, merging), null, `should pass: ${ok}`)
+  }
+})
+
+test('force-push is refused in every form, a lease is allowed', () => {
+  const idle = { merging: false }
+  for (const bad of ['git push origin +main', 'git push -fu origin x', 'git -C repo push --force', 'git push --force-with-lease --force']) {
+    assert.ok(guardDecision(bad, idle), `should refuse: ${bad}`)
+  }
+  for (const ok of ['git push --force-with-lease --force-if-includes', 'git push -u origin main', 'git push origin feature']) {
+    assert.equal(guardDecision(ok, idle), null, `should pass: ${ok}`)
+  }
+})
+
+test('commandOf keeps argv arrays intact', () => {
+  assert.equal(guardDecision(commandOf({ command: ['git', 'commit', '-m', 'git rebase später'] })!, { merging: true }), null)
+  assert.ok(guardDecision(commandOf({ command: ['git', 'merge', '--abort'] })!, { merging: true }))
 })
 
 test('outside a merge only force-push is refused', () => {

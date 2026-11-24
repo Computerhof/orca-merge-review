@@ -92,10 +92,15 @@ async function run<T>(label: string, fn: () => Promise<T>, quiet = false): Promi
 let loadSeq = 0
 /** Bumped when a panel run starts, so a load left over from an earlier run never lands here. */
 let generation = 0
+/** When the panel last started a load itself; the worker's echo right after an action is skipped. */
+let lastLoadAt = 0
+/** HEAD the shown comparison was made against: when the branch moves, compare again. */
+let comparedHead: string | null = null
 
 async function load(): Promise<void> {
   const gen = generation
   const seq = ++loadSeq
+  lastLoadAt = Date.now()
   const st = await run('Lade …', () => plugin.request('repo.state', {}), true)
   if (!st || seq !== loadSeq || gen !== generation) return
   set(state, st)
@@ -103,7 +108,7 @@ async function load(): Promise<void> {
   const wanted = read(source)
   const pick = st.sources.some((s) => s.ref === wanted) ? wanted : (st.suggestedSource ?? '')
   if (pick !== wanted) set(source, pick)
-  if (pick && read(comparison)?.source !== pick) await compare(pick)
+  if (pick && (read(comparison)?.source !== pick || comparedHead !== st.head)) await compare(pick)
   void plugin.request('watch.get', {}).then((r) => set(watch, r.watch)).catch(() => {})
 }
 
@@ -115,8 +120,12 @@ async function compare(ref: string): Promise<void> {
     set(comparison, null)
     return
   }
+  const head = read(state)?.head ?? null
   const c = await run('Vergleiche …', () => plugin.request('repo.compare', { source: ref }))
-  if (read(source) === ref) set(comparison, c ?? null)
+  if (read(source) === ref) {
+    set(comparison, c ?? null)
+    comparedHead = c ? head : null
+  }
 }
 
 async function doMerge(): Promise<void> {
@@ -142,12 +151,19 @@ const openTab = (input: ReviewView) =>
 
 // ------------------------------------------------------------------ setup
 
+/** The worker refreshes 400 ms after a request and then reports it; a load within this is ours. */
+const ECHO_MS = 2500
+
 export function setup(ctx: PanelContext): void {
   generation++
   loadSeq = 0
+  lastLoadAt = 0
+  comparedHead = null
   running.clear()
   ctx.subscriptions.push(
-    plugin.on('repo.changed', ({ workspaceId }) => {
+    plugin.on('repo.changed', ({ workspaceId, reason }) => {
+      // `workspace.changed` below already loads on focus; a request echo follows our own load.
+      if (reason === 'focus' || (reason === 'request' && Date.now() - lastLoadAt < ECHO_MS)) return
       const mine = read(state)?.workspace?.id
       if (!workspaceId || !mine || workspaceId === mine) void load()
     }),
@@ -229,6 +245,12 @@ function Prediction({ c }: { c: Comparison }) {
         Kein Merge-Commit nötig, keine Konflikte.
       </Callout>
     )
+  if (p.unrelated)
+    return (
+      <Callout tone="danger" icon="error" title="Keine gemeinsame Historie">
+        Die beiden Branches haben keinen gemeinsamen Vorfahren. Git verweigert diesen Merge.
+      </Callout>
+    )
   if (p.clean === null)
     return <Callout tone="neutral" icon="info" title="Keine Vorhersage">Git ist zu alt für merge-tree (ab 2.38).</Callout>
   if (p.clean) return <Callout tone="success" icon="check" title="Konfliktfrei vorhergesagt" />
@@ -302,7 +324,7 @@ function ModeCompare({ st }: { st: RepoState }) {
         <Stack gap="sm">
           {c.preview.upToDate ? null : (
             <Text weight="medium">
-              {`${c.incoming.length} Commit(s) kommen rein · ${c.files.length} Datei(en) · +${added} −${deleted}`}
+              {`${c.ahead} Commit(s) kommen rein · ${c.files.length} Datei(en) · +${added} −${deleted}`}
             </Text>
           )}
           {c.behind ? <Text muted size="xs">{`${st.branch} ist ${c.behind} Commit(s) weiter als ${src}.`}</Text> : null}
@@ -333,7 +355,7 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
         Im breiten Tab prüfen
       </Button>
 
-      <Collapsible title={`Commits (${c.incoming.length})`}>
+      <Collapsible title={c.ahead > c.incoming.length ? `Commits (neueste ${c.incoming.length} von ${c.ahead})` : `Commits (${c.ahead})`}>
         <Table
           label="Eingehende Commits"
           maxHeight="md"
@@ -428,7 +450,7 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
         <Callout tone="accent" title={`${src} → ${st.branch} mergen?`}>
           <Stack gap="xs">
             <Text size="xs">
-              {`${c.incoming.length} Commit(s), ${c.files.length} Datei(en)` +
+              {`${c.ahead} Commit(s), ${c.files.length} Datei(en)` +
                 (c.preview.clean === false ? `, ${c.preview.conflicts.length} Konflikt-Datei(en) erwartet` : '') +
                 (opt?.agent === 'working' ? '. Achtung: der Agent der Quelle arbeitet noch.' : '.')}
             </Text>

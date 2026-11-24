@@ -18,6 +18,12 @@ export class PendingSends {
     this.waiting.set(terminalId, { text, timer })
   }
 
+  /** Drops what is still waiting (the worker stops). */
+  dispose(): void {
+    for (const { timer } of this.waiting.values()) clearTimeout(timer)
+    this.waiting.clear()
+  }
+
   /** Called from agent.status.changed: a waiting or done agent can take input. */
   onStatus(terminalId: string | undefined, state: string): void {
     if (terminalId && this.waiting.has(terminalId) && (state === 'waiting' || state === 'done')) {

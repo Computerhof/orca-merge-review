@@ -42,7 +42,9 @@ export function sideBySide(patch: string): SideBySideRow[] {
     adds = []
   }
 
-  for (const raw of patch.split('\n')) {
+  const lines = patch.split('\n')
+  if (lines[lines.length - 1] === '') lines.pop() // the newline that ends the patch is no line
+  for (const raw of lines) {
     const line = raw.replace(/\r$/, '')
     const hunk = HUNK.exec(line)
     if (hunk) {

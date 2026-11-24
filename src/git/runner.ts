@@ -11,8 +11,17 @@ export interface GitResult {
 
 export interface GitRunner {
   /** Runs `git <args>` in `cwd`. Never throws for a non-zero exit; it reports `code`. */
-  run(cwd: string, args: readonly string[], options?: { stdin?: string }): Promise<GitResult>
+  run(cwd: string, args: readonly string[], options?: RunOptions): Promise<GitResult>
 }
+
+export interface RunOptions {
+  stdin?: string
+  /** Milliseconds before the process is killed; 0 waits forever. Default 60 s. */
+  timeoutMs?: number
+}
+
+/** Long enough for merge and commit, whose Git hooks (lint, typecheck) may run for minutes. */
+export const LONG_RUNNING_MS = 15 * 60_000
 
 /** Runs the local `git` executable. Arguments go straight to the process, never through a shell. */
 export class LocalGitRunner implements GitRunner {
@@ -22,24 +31,32 @@ export class LocalGitRunner implements GitRunner {
     this.gitPath = gitPath
   }
 
-  run(cwd: string, args: readonly string[], options: { stdin?: string } = {}): Promise<GitResult> {
+  run(cwd: string, args: readonly string[], options: RunOptions = {}): Promise<GitResult> {
     return new Promise((resolve, reject) => {
       const child = execFile(
         this.gitPath,
-        // Never let Git open an editor or a pager inside a worker with no terminal.
-        ['-c', 'core.editor=true', '-c', 'core.pager=cat', ...args],
+        // Never let Git open an editor or a pager inside a worker with no terminal. Paths are
+        // literal: a file named `src/[id].ts` must never match `src/i.ts` as a glob would.
+        ['--literal-pathspecs', '-c', 'core.editor=true', '-c', 'core.pager=cat', ...args],
         {
           cwd,
           encoding: 'utf8',
           maxBuffer: 32 * 1024 * 1024,
-          timeout: 60_000,
+          timeout: options.timeoutMs ?? 60_000,
           windowsHide: true,
           env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true', LC_ALL: 'C' }
         },
         (error, stdout, stderr) => {
           if (error && typeof error.code !== 'number') {
-            // Spawn failure (git missing, cwd gone, timeout): a real error, not an exit code.
-            reject(new Error(`git konnte nicht gestartet werden: ${error.message}`))
+            // Not an exit code: output too large, killed after the timeout, or git missing.
+            const e = error as NodeJS.ErrnoException & { killed?: boolean }
+            const reason =
+              e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+                ? `git ${args[0]}: Ausgabe zu groß (über 32 MB)`
+                : e.killed
+                  ? `git ${args[0]} hat zu lange gebraucht und wurde abgebrochen`
+                  : `git konnte nicht gestartet werden: ${error.message}`
+            reject(new Error(reason))
             return
           }
           resolve({ code: error ? (error.code as number) : 0, stdout, stderr })
@@ -64,9 +81,10 @@ export async function git(
   runner: GitRunner,
   cwd: string,
   args: readonly string[],
-  ok: readonly number[] = [0]
+  ok: readonly number[] = [0],
+  options?: RunOptions
 ): Promise<GitResult> {
-  const result = await runner.run(cwd, args)
+  const result = await runner.run(cwd, args, options)
   if (!ok.includes(result.code)) {
     const detail = (result.stderr || result.stdout).trim().split('\n').slice(0, 8).join('\n')
     throw new GitError(`git ${args[0]} fehlgeschlagen (Exit ${result.code}): ${detail}`, result)
