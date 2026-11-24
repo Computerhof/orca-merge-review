@@ -10,9 +10,9 @@ export interface ReviewNote {
   sent: boolean
 }
 
-/** Text for a Markdown table cell: one line, pipes escaped. */
-function cell(s: string): string {
-  return s.replace(/\r?\n/g, ' ').replace(/\|/g, '\\|')
+/** Text for a Markdown table cell: one line, backslashes and pipes escaped (in that order). */
+export function cell(s: string): string {
+  return s.replace(/\r?\n/g, ' ').replace(/\\/g, '\\\\').replace(/\|/g, '\\|')
 }
 
 export function predictionText(c: Comparison): string {

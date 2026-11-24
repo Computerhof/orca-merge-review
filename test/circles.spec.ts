@@ -1,7 +1,7 @@
 // Pure pieces behind the v0.2 loops: review export, merge hint, path mapping for saves.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { reviewMarkdown } from '../src/core/reviewExport.ts'
+import { cell, reviewMarkdown } from '../src/core/reviewExport.ts'
 import { MERGE_HINT_TAG, mergeHintPrompt } from '../src/core/prompts.ts'
 import { relativeTo } from '../src/core/repo.ts'
 import type { Comparison } from '../src/types.ts'
@@ -45,6 +45,11 @@ test('review markdown: summary, notes per file, commits, escaped file table', ()
   assert.match(md, /\| R \| alt\.ts → neu\.ts \| \+0 −0 \|/)
   assert.match(md, /\| A \| logo\.png \| binär \|/)
   assert.match(md, /_Erstellt mit Merge & Review 9\.9\.9_\n$/)
+})
+
+test('table cells escape backslashes before pipes, so a path cannot break out of its cell', () => {
+  assert.equal(cell('a\\|b'), 'a\\\\\\|b')
+  assert.equal(cell('x|y\nz'), 'x\\|y z')
 })
 
 test('the merge hint is one line, tagged, and names the open conflicts', () => {
