@@ -57,6 +57,8 @@ export interface MergeWatch {
 
 export interface RepoState {
   workspace: WorkspaceInfo | null
+  /** The project's base branch (remote default, else main/master/develop); null if none. */
+  base: string | null
   /** Why the panel cannot work here, in words for the person; null when it can. */
   problem: string | null
   branch: string | null
@@ -116,6 +118,24 @@ export interface MergePreview {
   upToDate: boolean
   /** True when target can fast-forward to source. */
   fastForward: boolean
+}
+
+/** K10: one workspace of the project, seen from the base branch. */
+export interface OverviewRow {
+  workspaceId: string
+  name: string
+  branch: string
+  agent?: AgentActivity
+  /** Commits the workspace has that the base lacks. */
+  ahead: number
+  /** Commits the base has that the workspace lacks. */
+  behind: number
+  preview: MergePreview
+}
+
+export interface Overview {
+  base: string
+  rows: OverviewRow[]
 }
 
 export interface MergeOutcome {

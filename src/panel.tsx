@@ -34,6 +34,7 @@ import {
   type PanelContext
 } from 'orca'
 import './protocol.ts'
+import { readiness, readinessLabel } from './core/readiness.ts'
 import { defined } from './defined.ts'
 import { VERSION } from './version.ts'
 import type {
@@ -41,6 +42,7 @@ import type {
   Comparison,
   MergeMode,
   MergeWatch,
+  Overview,
   RepoState,
   ReviewView,
   SourceOption
@@ -62,6 +64,7 @@ const stale = atom(false)
 const note = atom('')
 const notePath = atom('')
 const watch = atom<MergeWatch | null>(null)
+const overview = atom<Overview | null>(null)
 
 // ------------------------------------------------------------------ actions
 
@@ -104,12 +107,20 @@ async function load(): Promise<void> {
   const st = await run('Lade …', () => plugin.request('repo.state', {}), true)
   if (!st || seq !== loadSeq || gen !== generation) return
   set(state, st)
+  // K10: on the base workspace, show which workspaces of the project are ready to merge.
+  if (!st.merge && st.base && st.branch === st.base) void loadOverview(gen)
+  else set(overview, null)
   if (st.merge) return
   const wanted = read(source)
   const pick = st.sources.some((s) => s.ref === wanted) ? wanted : (st.suggestedSource ?? '')
   if (pick !== wanted) set(source, pick)
   if (pick && (read(comparison)?.source !== pick || comparedHead !== st.head)) await compare(pick)
   void plugin.request('watch.get', {}).then((r) => set(watch, r.watch)).catch(() => {})
+}
+
+async function loadOverview(gen: number): Promise<void> {
+  const o = await plugin.request('overview.list', {}).catch(() => null)
+  if (gen === generation) set(overview, o)
 }
 
 async function compare(ref: string): Promise<void> {
@@ -321,6 +332,8 @@ function ModeCompare({ st }: { st: RepoState }) {
         </Callout>
       ) : null}
 
+      <OverviewSection />
+
       <Select
         label="Quelle"
         value={src}
@@ -363,6 +376,40 @@ function ModeCompare({ st }: { st: RepoState }) {
 
       <WatchSection st={st} />
     </Stack>
+  )
+}
+
+/** K10: every workspace of the project as seen from the base; Enter or a double click compares it. */
+function OverviewSection() {
+  const o = read(overview)
+  if (!o?.rows.length) return null
+  const ready = o.rows.filter((r) => readiness(r) === 0).length
+  const conflicts = o.rows.filter((r) => readiness(r) === 1).length
+  const title = `Workspaces des Projekts · ${ready} bereit` + (conflicts ? ` · ${conflicts} mit Konflikten` : '')
+  return (
+    <Collapsible title={title} description={`Gegen ${o.base} geprüft (merge-tree, ändert nichts).`} defaultOpen>
+      <Table
+        label="Workspaces des Projekts (Enter oder Doppelklick vergleicht)"
+        maxHeight="md"
+        columns={[
+          { key: 'name', label: 'Workspace' },
+          { key: 'agent', label: 'Agent', width: 'sm', hideBelow: 'sm' },
+          { key: 'delta', label: 'vor/hinter', width: 'sm', align: 'end' },
+          { key: 'state', label: 'Vorhersage', width: 'md' }
+        ]}
+        rows={o.rows.map((r) => ({
+          key: r.branch,
+          disabled: readiness(r) === 3,
+          cells: {
+            name: r.name === r.branch ? r.name : `${r.name} · ${r.branch}`,
+            agent: r.agent && r.agent !== 'inactive' ? AGENT_LABEL[r.agent].replace(/^Agent /, '') : '–',
+            delta: `+${r.ahead} / −${r.behind}`,
+            state: readinessLabel(r)
+          }
+        }))}
+        onRowAction={({ key }) => void compare(key)}
+      />
+    </Collapsible>
   )
 }
 

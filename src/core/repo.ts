@@ -123,6 +123,17 @@ export class Repo {
     return { local, remote }
   }
 
+  /** Every local branch with the commit it points at, in one Git call. */
+  async branchHeads(): Promise<Map<string, string>> {
+    const r = await this.git(['for-each-ref', '--format=%(objectname) %(refname)', 'refs/heads'])
+    const heads = new Map<string, string>()
+    for (const line of r.stdout.split('\n')) {
+      const space = line.indexOf(' ')
+      if (space > 0) heads.set(line.slice(space + 1).trim().replace(/^refs\/heads\//, ''), line.slice(0, space))
+    }
+    return heads
+  }
+
   /** The project's base branch: the remote's default branch, else main/master/develop; null if none. */
   async baseBranch(known?: { local: string[]; remote: string[] }): Promise<string | null> {
     const { local, remote } = known ?? (await this.refs())

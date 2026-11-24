@@ -14,6 +14,7 @@ src/
     gitGuard.ts         Agent-Toolaufruf → „zerstört das einen laufenden Merge?“ (synchron)
     prompts.ts          Texte für Agenten (Review-Anmerkung, Konfliktauftrag, Merge-Wächter, Merge-Hinweis)
     reviewExport.ts     Review als Markdown (Vergleich, Commits, Dateien, Notizen)
+    readiness.ts        K10: Wie bereit ist ein Workspace? (Sortierung, Beschriftung)
   git/                  ── austauschbare Anbindung ──
     runner.ts           GitRunner-Schnittstelle + LocalGitRunner (execFile, keine Shell)
     files.ts            FileAccess auf das lokale Dateisystem (UTF-8, sonst verlustfrei latin1)
@@ -27,6 +28,7 @@ src/
     agents.ts           Anmerkung zustellen (laufend → fortsetzen → neu), Warteschlange
     watch.ts            Merge-Wächter als Orca-Automation
     circles.ts          K13 Speichern = gelöst, K14 Merge-Hinweis im Prompt, K15 Zum Agenten
+    overview.ts         K10: alle Workspaces des Projekts gegen die Base (gecacht pro Commit-Paar)
     memory.ts           Plugin-Speicher: letzte Quelle, Undo-Daten, beobachtete Quellen
     settings.ts         Einstellungen, synchron lesbar
   panel.tsx             Seitenleiste (Orca-Komponenten), Modi A/B/C

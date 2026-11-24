@@ -203,3 +203,25 @@ test('K15: "Zum Agenten" focuses the agent terminal of the source workspace', as
     await worker.deactivate()
   }
 })
+
+test('K10: the base workspace lists the other workspaces with their prediction', async () => {
+  const dir = divergentRepo()
+  const host = mockHost({ results: hostResults(dir) })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    const st = await worker.request('repo.state', {})
+    assert.equal(st.base, 'main')
+    const o = await worker.request('overview.list', {})
+    assert.equal(o.base, 'main')
+    assert.equal(o.rows.length, 1)
+    assert.equal(o.rows[0].workspaceId, 'ws-feature')
+    assert.equal(o.rows[0].agent, 'done')
+    assert.equal(o.rows[0].ahead, 1)
+    assert.equal(o.rows[0].behind, 1)
+    assert.deepEqual(o.rows[0].preview.conflicts, ['a.txt'])
+    // A second call answers from the cache: same result, no new merge-tree needed.
+    assert.deepEqual(await worker.request('overview.list', {}), o)
+  } finally {
+    await worker.deactivate()
+  }
+})

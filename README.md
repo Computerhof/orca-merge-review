@@ -15,6 +15,7 @@ Version: siehe `orca-plugin.json` (wird unten im Panel und im Tab angezeigt) · 
 | Bereich | Funktion |
 |---|---|
 | **Vergleichen** | Quelle wählen: Orca-Workspaces desselben Projekts (mit Agent-Status), Branches, Remotes. Die Base ist vorausgewählt. Zeigt eingehende Commits, geänderte Dateien (+/−) und wie weit das Ziel voraus ist. |
+| **Übersicht** | Auf dem Base-Workspace (z. B. `main`): alle Workspaces des Projekts mit Agent-Status, Commits vor/hinter und Vorhersage, bereite zuerst. Ein Doppelklick vergleicht. |
 | **Vorhersage** | `git merge-tree --write-tree` sagt Konflikte voraus, ohne Arbeitsbaum oder Refs anzufassen: konfliktfrei, Fast-forward, schon enthalten oder *N Konflikt-Dateien*. |
 | **Review-Tab** | Breiter Editor-Tab: Dateiliste links, Side-by-Side-Diff rechts. Ein Klick auf eine Zeilennummer fügt sie in eine Anmerkung an den Agenten ein. |
 | **Mergen** | Merge-Commit, Fast-forward, nur Fast-forward oder Squash. Bestätigung in zwei Schritten, die Commits, Dateien, erwartete Konflikte und einen noch arbeitenden Agenten nennt. Gesperrt (mit Begründung) bei schmutzigem Arbeitsbaum oder losgelöstem HEAD. |
