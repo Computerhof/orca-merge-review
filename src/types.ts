@@ -13,13 +13,35 @@ export interface WorkspaceInfo {
   hostId: string | null
 }
 
+/** What is under way in a working tree (v0.5: also rebase and cherry-pick, E9–E12 in docs/UX-PLAN.md). */
+export type OperationKind = 'merge' | 'rebase' | 'cherry-pick'
+
 export interface MergeInProgress {
-  /** What is being merged in (MERGE_HEAD), as a branch name when Git knows one. */
+  /** Merge, rebase or cherry-pick. The field is called `merge` in RepoState for compatibility. */
+  kind: OperationKind
+  /**
+   * Merge: what is being merged in (MERGE_HEAD), as a branch name when Git knows one.
+   * Rebase: the branch or commit it rebases onto. Cherry-pick: the commit being applied (short hash).
+   */
   source: string
   /** Files Git still lists as unmerged. */
   conflicts: string[]
   /** Unmerged files whose working copy no longer has conflict markers (ready to mark resolved). */
   markerFree: string[]
+  /**
+   * Rebase and cherry-pick apply commits one by one: which one is being applied (1-based) of how many,
+   * its short hash and subject. Null for a merge, or when Git does not tell (cherry-pick of one commit: 1 of 1).
+   */
+  step: { current: number; total: number; commit: string | null; subject: string | null } | null
+  /**
+   * Names for the two sides of a conflict, already the right way round: during a rebase Git's
+   * "ours" is the base being rebased onto and "theirs" the commit being replayed.
+   * Merge: { ours: current branch, theirs: source }. Rebase: { ours: onto, theirs: "abc123 subject" }.
+   * Cherry-pick: { ours: current branch, theirs: "abc123 subject" }.
+   */
+  sides: { ours: string; theirs: string }
+  /** The branch being rebased (rebase only; HEAD is detached meanwhile), else null. */
+  branch: string | null
 }
 
 /** Agent activity of a workspace, as Orca reports it. */
@@ -118,6 +140,8 @@ export interface Comparison {
   behind: number
   files: FileChange[]
   preview: MergePreview
+  /** Rebasing the current branch onto `source` (E9/E10); null when the branch is detached. */
+  rebase: RebaseImpact | null
 }
 
 export interface MergePreview {
@@ -178,9 +202,20 @@ export interface Overview {
 }
 
 export interface MergeOutcome {
-  status: 'merged' | 'conflicts' | 'up-to-date' | 'squashed'
+  /** `rebased` / `picked`: a rebase or cherry-pick finished; `skipped`: the last commit was skipped and the operation finished. */
+  status: 'merged' | 'conflicts' | 'up-to-date' | 'squashed' | 'rebased' | 'picked'
   message: string
   conflicts: string[]
+}
+
+/** What rebasing the current branch onto a source would rewrite (E10: warn about pushed commits). */
+export interface RebaseImpact {
+  /** Commits of the current branch that get rewritten (they are not in the source). */
+  commits: number
+  /** Of those, how many the branch's upstream already has: rebasing them needs a force push afterwards. 0 without an upstream. */
+  pushed: number
+  /** The upstream's name, e.g. `origin/feature`, or null. */
+  upstream: string | null
 }
 
 export interface ConflictHunk {
