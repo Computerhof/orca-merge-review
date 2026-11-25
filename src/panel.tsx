@@ -11,6 +11,7 @@ import {
   CodeView,
   Collapsible,
   EmptyState,
+  env,
   Heading,
   IconButton,
   Input,
@@ -38,6 +39,7 @@ import './protocol.ts'
 import { readiness, readinessLabel } from './core/readiness.ts'
 import { defined } from './defined.ts'
 import { VERSION } from './version.ts'
+import { localeOf, setLocale } from './i18n/index.ts'
 import type {
   AgentActivity,
   Comparison,
@@ -190,6 +192,9 @@ function AgentButton({ opt }: { opt: SourceOption }) {
 const ECHO_MS = 2500
 
 export function setup(ctx: PanelContext): void {
+  // Orca's UI language for this panel's texts; the worker learns it too (status bar, refusals).
+  setLocale(localeOf(env.locale))
+  void plugin.request('ui.locale', { locale: env.locale }).catch(() => {})
   generation++
   loadSeq = 0
   lastLoadAt = 0

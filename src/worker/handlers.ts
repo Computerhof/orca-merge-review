@@ -4,6 +4,7 @@ import { resolveConflictsPrompt, reviewFeedbackPrompt, testFixPrompt } from '../
 import { UserError } from '../core/repo.ts'
 import type { RepoState, ReviewView } from '../types.ts'
 import { deliverToAgent, launchAgent, type PendingSends } from './agents.ts'
+import { getLocale, localeOf, setLocale } from '../i18n/index.ts'
 import type { Memory } from './memory.ts'
 import type { Monitor } from './monitor.ts'
 import { openReviewTab } from './reviewTab.ts'
@@ -359,6 +360,16 @@ export function registerHandlers(deps: Deps): void {
       touches
     )
   )
+
+  orca.panels.handle('ui.locale', async ({ locale }) => {
+    const l = localeOf(locale)
+    if (l !== getLocale()) {
+      setLocale(l)
+      await memory.setLocale(l)
+      monitor.schedule(null, 'locale') // status bar texts in the new language
+    }
+    return { locale: l }
+  })
 
   orca.panels.handle(
     'ui.sourceControl',

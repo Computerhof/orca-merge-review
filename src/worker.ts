@@ -3,6 +3,7 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import { commandOf, guardDecision, runsGit } from './core/gitGuard.ts'
 import { LocalGitRunner } from './git/runner.ts'
+import { localeOf, setLocale } from './i18n/index.ts'
 import { PendingSends } from './worker/agents.ts'
 import { Jobs } from './worker/jobs.ts'
 import { onSave, promptHint } from './worker/circles.ts'
@@ -27,6 +28,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const pending = new PendingSends(orca)
   pendingSends = pending
   void workspaces.list().catch(() => {}) // hooks map workspace ids synchronously from this listing
+  // Texts in the language the panel last reported (the worker cannot read Orca's UI language).
+  setLocale(localeOf((await memory.locale().catch(() => null)) ?? 'de'))
   monitor = new Monitor(orca, workspaces)
   const mon = monitor
   mon.jobOf = (id) => jobRunner.get(id)

@@ -6,6 +6,7 @@ import { sideBySide } from '../core/diffview.ts'
 import { reviewMarkdown, type ReviewNote } from '../core/reviewExport.ts'
 import { defined } from '../defined.ts'
 import { VERSION } from '../version.ts'
+import { localeOf, setLocale } from '../i18n/index.ts'
 import type {
   Comparison,
   ConflictChoice,
@@ -568,6 +569,7 @@ function applyTypography(t: Typography): void {
 }
 
 async function start(): Promise<void> {
+  setLocale(localeOf(orca.locale))
   document.head.append(el('style', {}, STYLES))
   if (orca.host.has('editor.readTypography')) {
     orca.host.call('editor.readTypography').then(applyTypography).catch(() => {})
