@@ -2,6 +2,7 @@
 // Privacy and secret guard for a public repository.
 //   node scripts/check-private.mjs --staged   (pre-commit hook: staged files + commit identity)
 //   node scripts/check-private.mjs --all      (CI and `npm run check:private`: every tracked file)
+//   node scripts/check-private.mjs --commits <range>   (CI: identities and messages of new commits)
 //
 // Generic rules live here (public). Personal markers (names, company domains, internal hosts)
 // belong in `.private-patterns` (git-ignored, one regular expression per line, # comments), so
@@ -9,8 +10,21 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 
-const mode = process.argv.includes('--all') ? 'all' : 'staged'
+const commitsAt = process.argv.indexOf('--commits')
+const mode = commitsAt >= 0 ? 'commits' : process.argv.includes('--all') ? 'all' : 'staged'
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+
+/**
+ * Addresses that may appear in the public history: GitHub's noreply addresses (personal ones are
+ * `<id>+<login>@users.noreply.github.com`) and the co-author address of the coding assistant.
+ */
+const PUBLIC_EMAIL = [
+  /^(\d+\+)?[A-Za-z0-9-]+(\[bot\])?@users\.noreply\.github\.com$/i, // people and bots (dependabot[bot])
+  /^noreply@github\.com$/i, // GitHub as committer of squash merges
+  /^noreply@anthropic\.com$/i // co-author trailer of the coding assistant
+]
+const isPublicEmail = (email) => PUBLIC_EMAIL.some((r) => r.test(email.trim()))
+const NOREPLY_HINT = 'git config user.email "<id>+<login>@users.noreply.github.com"'
 
 /** Paths that must never be committed, whatever they contain. */
 const FORBIDDEN_PATHS = [
@@ -50,9 +64,11 @@ function privatePatterns() {
 }
 
 const files =
-  mode === 'all'
-    ? git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split('\0').filter(Boolean)
-    : git('diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z').split('\0').filter(Boolean)
+  mode === 'commits'
+    ? []
+    : mode === 'all'
+      ? git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split('\0').filter(Boolean)
+      : git('diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z').split('\0').filter(Boolean)
 
 const read = (path) =>
   mode === 'all' ? (existsSync(path) ? readFileSync(path, 'utf8') : '') : git('show', `:${path}`)
@@ -83,14 +99,45 @@ for (const path of files) {
 
 if (mode === 'staged') {
   // The commit identity becomes public with the history.
-  const ident = `${git('config', 'user.name').trim()} <${git('config', 'user.email').trim()}>`
+  const email = git('config', 'user.email').trim()
+  const ident = `${git('config', 'user.name').trim()} <${email}>`
+  if (!isPublicEmail(email)) {
+    problems.push(`Commit-Adresse ist keine öffentliche noreply-Adresse. Für dieses Repo setzen:\n    ${NOREPLY_HINT}`)
+  }
   for (const [re, what] of privatePatterns()) {
-    if (re.test(ident)) {
-      problems.push(
-        `Commit-Identität enthält einen ${what}. Für dieses Repo eine öffentliche Adresse setzen, z. B.\n` +
-          `    git config user.email "<id>+<login>@users.noreply.github.com"`
-      )
+    if (re.test(ident)) problems.push(`Commit-Identität enthält einen ${what}.\n    ${NOREPLY_HINT}`)
+  }
+}
+
+if (mode === 'commits') {
+  // Commits that reach GitHub without the local hook: identities, co-authors and messages.
+  const range = process.argv[commitsAt + 1]
+  if (!range) {
+    console.error('check-private: --commits braucht einen Bereich (origin/main..HEAD) oder einen Commit')
+    process.exit(2)
+  }
+  const SEP = '\u001f'
+  const END = '\u001e'
+  // A single commit (no "..") is checked on its own: a push that created the branch.
+  const revs = range.includes('..') ? [range] : ['-1', range]
+  const log = git('log', '--format=%H' + SEP + '%an' + SEP + '%ae' + SEP + '%cn' + SEP + '%ce' + SEP + '%B' + END, ...revs)
+  const messageRules = [...SECRET_PATTERNS, ...privatePatterns()]
+  for (const entry of log.split(END).map((e) => e.trim()).filter(Boolean)) {
+    const [sha, an, ae, cn, ce, body = ''] = entry.split(SEP)
+    const short = sha.slice(0, 7)
+    if (!isPublicEmail(ae)) problems.push(`${short}: Autor-Adresse ist nicht öffentlich (noreply)`)
+    if (!isPublicEmail(ce)) problems.push(`${short}: Committer-Adresse ist nicht öffentlich (noreply)`)
+    for (const m of body.matchAll(/^co-authored-by:.*<([^>]*)>/gim)) {
+      if (!isPublicEmail(m[1])) problems.push(`${short}: Co-Author-Adresse ist nicht öffentlich`)
     }
+    const text = `${an}\n${cn}\n${body}`
+    for (const [re, what] of messageRules) {
+      if (re.test(text)) problems.push(`${short}: Commit-Text oder Name enthält einen ${what}`)
+    }
+  }
+  if (!problems.length) {
+    console.log(`check-private: Commits in ${range} sauber.`)
+    process.exit(0)
   }
 }
 
