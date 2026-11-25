@@ -79,8 +79,13 @@ export async function focusAgent(deps: CircleDeps, ws: Resolved, source: string)
     const { agents } = await deps.orca.host.call('agents.list', { workspaceId: row.id })
     const agent = agents.find((a) => a.terminalId && a.state !== 'done') ?? agents.find((a) => a.terminalId)
     if (agent?.terminalId) {
+      // Show the workspace first: focusing a terminal of a workspace that is not shown can fail.
+      await deps.orca.host.call('workspace.open', { workspaceId: row.id })
       const r = await deps.orca.host.call('terminal.focus', { terminalId: agent.terminalId })
       if (r.focused) return 'terminal'
+      deps.orca.log(`focus agent: Orca did not focus ${agent.terminalId} (window in the background?)`)
+    } else {
+      deps.orca.log(`focus agent: ${agents.length} agent(s) in ${row.id}, none with a terminal`)
     }
   } catch (error) {
     deps.orca.log(`focus agent: ${(error as Error).message}`)

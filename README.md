@@ -54,7 +54,7 @@ Orca zeigt vor der Freigabe, welche Rechte das Plugin bekommt, und warum es sie 
 | Worker (`trusted-worker`) | Git lokal ausführen; den eingestellten Testbefehl ausführen |
 | `workspace:read` / `workspace:write` | Workspaces und Pfade finden, Review-Tab und Dateien öffnen |
 | `agent:read` | Melden, wenn der Agent einer Quelle fertig ist |
-| `agent:launch`, `terminal:send` | Anmerkungen an Agenten, Agent für Konflikte, Sessions fortsetzen |
+| `agent:launch`, `terminal:send` | Anmerkungen an Agenten, Agent für Konflikte und rote Tests, Sessions fortsetzen; tippt auf Knopfdruck den eigenen Auftrag nach, wenn Orca ihn beim Start nicht abschickt |
 | `history:read` | Die letzte Agent-Session eines Workspace finden (nur Titel/Metadaten) |
 | `automation:read` / `automation:write` | Merge-Wächter anlegen, pausieren, entfernen |
 | `notifications:show`, `storage:own`, `settings:own` | Meldungen, eigene Merkliste, Einstellungen |

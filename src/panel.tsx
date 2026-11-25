@@ -68,6 +68,11 @@ const watch = atom<MergeWatch | null>(null)
 const overview = atom<Overview | null>(null)
 /** What the person types as the project's test command, before saving; null = not edited. */
 const testDraft = atom<string | null>(null)
+/** Rows shown per long table; scrolling to the end shows the next page (large repositories). */
+const PAGE = 200
+const fileRows = atom(PAGE)
+const commitRows = atom(PAGE)
+const overviewRows = atom(PAGE)
 
 // ------------------------------------------------------------------ actions
 
@@ -128,6 +133,8 @@ async function loadOverview(gen: number): Promise<void> {
 
 async function compare(ref: string): Promise<void> {
   set(source, ref)
+  set(fileRows, PAGE)
+  set(commitRows, PAGE)
   set(confirm, null)
   set(stale, false)
   if (!ref) {
@@ -441,6 +448,28 @@ function ParkedCard({ st }: { st: RepoState }) {
 }
 
 /** K11/K12: the running or last test run / probe merge here, with the next sensible step. */
+/** An agent this panel started that never began: Orca did not send its prompt. */
+function StalledAgentCard({ st }: { st: RepoState }) {
+  if (!st.stalledAgent) return null
+  return (
+    <Callout tone="warning" title="Der gestartete Agent hat seinen Auftrag nicht bekommen">
+      <Stack gap="sm">
+        <Text size="sm">
+          Orca hat den Start-Auftrag nicht abgeschickt; der Agent wartet leer. Merge &amp; Review kann ihn jetzt eintippen.
+        </Text>
+        <Row gap="sm">
+          <Button size="sm" icon="agent" onPress={() => void act('Tippe Auftrag …', () => plugin.request('agent.retryPrompt', {}), 'Auftrag an den Agenten geschickt.')}>
+            Auftrag eintippen
+          </Button>
+          <Button size="sm" variant="ghost" onPress={() => void act('…', () => plugin.request('agent.dismissStalled', {}))}>
+            Ausblenden
+          </Button>
+        </Row>
+      </Stack>
+    </Callout>
+  )
+}
+
 function JobCard({ st }: { st: RepoState }) {
   const job = st.job
   if (!job) return null
@@ -555,7 +584,9 @@ function OverviewSection() {
           { key: 'delta', label: 'vor/hinter', width: 'sm', align: 'end' },
           { key: 'state', label: 'Vorhersage', width: 'md' }
         ]}
-        rows={o.rows.map((r) => ({
+        hasMore={o.rows.length > read(overviewRows)}
+        onLoadMore={() => set(overviewRows, read(overviewRows) + PAGE)}
+        rows={o.rows.slice(0, read(overviewRows)).map((r) => ({
           key: r.branch,
           disabled: readiness(r) === 3,
           cells: {
@@ -575,6 +606,7 @@ function OverviewSection() {
 function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: string; opt: SourceOption | undefined }) {
   const conf = read(confirm)
   const working = !!read(busy)
+  const expected = new Set(c.preview.conflicts)
   const dirty = st.dirtyFiles.length
   const blockedBy = !st.branch
     ? 'HEAD ist losgelöst: erst einen Branch auschecken.'
@@ -597,7 +629,9 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
             { key: 'subject', label: 'Nachricht' },
             { key: 'at', label: 'Wann', width: 'sm', hideBelow: 'sm' }
           ]}
-          rows={c.incoming.map((x) => ({
+          hasMore={c.incoming.length > read(commitRows)}
+          onLoadMore={() => set(commitRows, read(commitRows) + PAGE)}
+          rows={c.incoming.slice(0, read(commitRows)).map((x) => ({
             key: x.hash,
             cells: { short: x.short, subject: x.subject, at: { type: 'relative', at: x.at, format: 'short' } }
           }))}
@@ -614,10 +648,12 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
             { key: 'path', label: 'Datei' },
             { key: 'delta', label: '±', width: 'sm', align: 'end' }
           ]}
-          rows={c.files.map((f) => ({
+          hasMore={c.files.length > read(fileRows)}
+          onLoadMore={() => set(fileRows, read(fileRows) + PAGE)}
+          rows={c.files.slice(0, read(fileRows)).map((f) => ({
             key: f.path,
             cells: {
-              st: (c.preview.conflicts.includes(f.path) ? '⚠ ' : '') + f.status,
+              st: (expected.has(f.path) ? '⚠ ' : '') + f.status,
               path: f.from ? `${f.from} → ${f.path}` : f.path,
               delta: f.added === null ? 'binär' : `+${f.added} −${f.deleted}`
             }
@@ -935,7 +971,20 @@ export default function Panel() {
   const st = read(state)
   const n = read(notice)
   const b = read(busy)
-  if (!st) return <Spinner label="Lade Repository …" />
+  if (!st) {
+    // A first load that failed would otherwise spin forever: show why, with a way to try again.
+    if (n?.tone === 'danger' && !b) {
+      return (
+        <Stack gap="sm">
+          <Callout tone="danger">{n.text}</Callout>
+          <Button icon="refresh" onPress={() => void load()}>
+            Erneut laden
+          </Button>
+        </Stack>
+      )
+    }
+    return <Spinner label="Lade Repository …" />
+  }
   if (st.problem || !st.workspace) {
     return <EmptyState icon="branch" title="Merge & Review" description={st.problem ?? 'Kein Workspace geöffnet.'} />
   }
@@ -944,6 +993,7 @@ export default function Panel() {
       <Header st={st} />
       {n ? <Callout tone={n.tone}>{n.text}</Callout> : null}
       {b ? <Text muted size="xs">{b}</Text> : null}
+      <StalledAgentCard st={st} />
       <JobCard st={st} />
       {st.merge ? <ModeResolve st={st} /> : <ModeCompare st={st} />}
       <Text muted size="xs">{`Merge & Review ${VERSION}`}</Text>

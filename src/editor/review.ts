@@ -128,6 +128,7 @@ async function loadPatch(my: number): Promise<boolean> {
   if (my !== seq) return false
   patchRows = r ? sideBySide(r.patch) : null
   patchTruncated = !!r?.truncated
+  rowLimit = ROWS_PAGE
   return true
 }
 
@@ -285,8 +286,26 @@ function badge(): HTMLElement | null {
 
 function body(): HTMLElement {
   if (repo?.problem) return el('main', { class: 'empty' }, repo.problem)
-  if (!repo) return el('main', { class: 'empty' }, loading ? 'Lade …' : 'Keine Daten.')
+  // A first load that failed shows why (the header keeps "Neu laden").
+  if (!repo) return el('main', { class: 'empty' }, loading ? 'Lade …' : (message?.text ?? 'Keine Daten.'))
   return el('main', { class: 'split' }, sidebar(), el('section', { class: 'content' }, notice(), content()))
+}
+
+// ---- large repositories: long lists are cut into pages, and unchanged parts are not rebuilt
+
+/** Files listed per page in the sidebar, and diff rows drawn per page. */
+const LIST_PAGE = 500
+const ROWS_PAGE = 3000
+let listLimit = LIST_PAGE
+let rowLimit = ROWS_PAGE
+
+const sameKey = (a: readonly unknown[], b: readonly unknown[]) => a.length === b.length && a.every((x, i) => x === b[i])
+
+/** The sidebar is rebuilt only when its data changes; choosing a file just moves the highlight. */
+let sidebarCache: { key: unknown[]; node: HTMLElement; items: Map<string, HTMLElement> } | null = null
+
+function more(label: string, onClick: () => void): HTMLElement {
+  return el('div', { class: 'pad' }, button(label, onClick))
 }
 
 function notice(): HTMLElement | null {
@@ -294,14 +313,33 @@ function notice(): HTMLElement | null {
 }
 
 function sidebar(): HTMLElement {
+  const key = [repo?.merge, cmp, listLimit]
+  if (!sidebarCache || !sameKey(sidebarCache.key, key)) {
+    const items = new Map<string, HTMLElement>()
+    sidebarCache = { key, node: buildSidebar(items), items }
+  }
+  for (const [path, item] of sidebarCache.items) item.classList.toggle('current', path === selected)
+  return sidebarCache.node
+}
+
+function buildSidebar(items: Map<string, HTMLElement>): HTMLElement {
   const list = el('nav', { class: 'files' })
+  const showMore = (total: number, what: string) => {
+    if (total > listLimit) {
+      list.append(more(`Weitere ${Math.min(LIST_PAGE, total - listLimit)} von ${total - listLimit} ${what} zeigen`, () => {
+        listLimit += LIST_PAGE
+        render()
+      }))
+    }
+  }
   if (repo?.merge) {
     const m = repo.merge
+    const ready = new Set(m.markerFree)
     list.append(el('div', { class: 'group' }, `Konflikte (${m.conflicts.length})`))
-    for (const f of m.conflicts) {
-      const ready = m.markerFree.includes(f)
-      list.append(fileItem(f, ready ? '✓' : '⚠', ready ? 'ok' : 'warn'))
+    for (const f of m.conflicts.slice(0, listLimit)) {
+      list.append(fileItem(items, f, ready.has(f) ? '✓' : '⚠', ready.has(f) ? 'ok' : 'warn'))
     }
+    showMore(m.conflicts.length, 'Konflikten')
     if (!m.conflicts.length) list.append(el('div', { class: 'muted pad' }, 'Alle gelöst. Abschließen im Panel oder mit „Merge & Review: Merge abschließen“.'))
     return list
   }
@@ -309,12 +347,13 @@ function sidebar(): HTMLElement {
     list.append(el('div', { class: 'muted pad' }, 'Quelle im Panel wählen.'))
     return list
   }
+  const expected = new Set(cmp.preview.conflicts)
   list.append(el('div', { class: 'group' }, `Dateien (${cmp.files.length})`))
-  for (const f of cmp.files) {
-    const warn = cmp.preview.conflicts.includes(f.path)
+  for (const f of cmp.files.slice(0, listLimit)) {
     const delta = f.added === null ? 'bin' : `+${f.added} −${f.deleted}`
-    list.append(fileItem(f.path, f.status, warn ? 'warn' : '', delta))
+    list.append(fileItem(items, f.path, f.status, expected.has(f.path) ? 'warn' : '', delta))
   }
+  showMore(cmp.files.length, 'Dateien')
   list.append(el('div', { class: 'group' }, `Commits (${cmp.ahead})`))
   for (const c of cmp.incoming.slice(0, 100)) {
     list.append(el('div', { class: 'commit', title: `${c.author} · ${new Date(c.at).toLocaleString()}` }, el('code', {}, c.short), text(' ' + c.subject)))
@@ -322,14 +361,16 @@ function sidebar(): HTMLElement {
   return list
 }
 
-function fileItem(path: string, mark: string, tone: string, extra = ''): HTMLElement {
-  return el(
+function fileItem(items: Map<string, HTMLElement>, path: string, mark: string, tone: string, extra = ''): HTMLElement {
+  const item = el(
     'button',
-    { class: `file ${path === selected ? 'current' : ''}`, title: path, onclick: () => void select(path) },
+    { class: 'file', title: path, onclick: () => void select(path) },
     el('span', { class: `mark ${tone}` }, mark),
     el('span', { class: 'path' }, path),
     extra ? el('span', { class: 'muted small' }, extra) : null
   )
+  items.set(path, item)
+  return item
 }
 
 function content(): HTMLElement | null {
@@ -341,19 +382,27 @@ function content(): HTMLElement | null {
 
 // ---- diff (side by side)
 
+/** The diff of the shown file is built once; a message or a re-render reuses it. */
+let diffCache: { key: unknown[]; node: HTMLElement } | null = null
+
 function diffView(): HTMLElement {
-  const box = el('div', { class: 'diff' })
   const src = cmp!.source
-  const isWorkspace = repo?.sources.some((s: SourceOption) => s.ref === src && s.kind === 'workspace')
+  const isWorkspace = !!repo?.sources.some((s: SourceOption) => s.ref === src && s.kind === 'workspace')
+  const key = [patchRows, selected, rowLimit, isWorkspace, patchTruncated]
+  if (patchRows && diffCache && sameKey(diffCache.key, key)) return diffCache.node
+  const box = el('div', { class: 'diff' })
   box.append(el('div', { class: 'filehead' }, el('strong', {}, selected!), patchTruncated ? el('span', { class: 'muted' }, ' (gekürzt)') : null))
   if (!patchRows) {
     box.append(el('div', { class: 'muted pad' }, 'lädt …'))
     return box
   }
   const table = el('table', { class: 'sbs' })
-  const noteField = noteBox(selected!, !!isWorkspace)
+  const noteField = noteBox(selected!, isWorkspace)
+  let drawn = 0
+  const shown = patchRows.filter((r) => r.kind !== 'meta').length
   for (const r of patchRows) {
     if (r.kind === 'meta') continue
+    if (++drawn > rowLimit) break
     if (r.kind === 'hunk') {
       table.append(el('tr', { class: 'hunk' }, el('td', { colspan: '4' }, r.left ?? '')))
       continue
@@ -378,7 +427,14 @@ function diffView(): HTMLElement {
     )
   }
   box.append(table)
+  if (shown > rowLimit) {
+    box.append(more(`Weitere ${Math.min(ROWS_PAGE, shown - rowLimit)} von ${shown - rowLimit} Zeilen zeigen`, () => {
+      rowLimit += ROWS_PAGE
+      render()
+    }))
+  }
   box.append(noteField.node)
+  diffCache = { key, node: box }
   return box
 }
 

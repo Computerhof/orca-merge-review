@@ -3,7 +3,7 @@ import type { OrcaWorkerApi } from 'orca/worker'
 import { resolveConflictsPrompt, reviewFeedbackPrompt, testFixPrompt } from '../core/prompts.ts'
 import { UserError } from '../core/repo.ts'
 import type { RepoState, ReviewView } from '../types.ts'
-import { deliverToAgent, type PendingSends } from './agents.ts'
+import { deliverToAgent, launchAgent, type PendingSends } from './agents.ts'
 import type { Memory } from './memory.ts'
 import type { Monitor } from './monitor.ts'
 import { openReviewTab } from './reviewTab.ts'
@@ -102,7 +102,8 @@ export function registerHandlers(deps: Deps): void {
           job: null,
           testCommand: null,
           suggestedTest: null,
-          projectName: null
+          projectName: null,
+          stalledAgent: null
         }
       }
       // One ref listing serves the state, the base guess and the source list.
@@ -133,7 +134,8 @@ export function registerHandlers(deps: Deps): void {
         job: jobs.get(ws.info.id),
         testCommand: await projectTestCommand(memory, ws),
         suggestedTest: await suggestTestCommand(ws),
-        projectName: ws.row.project ?? null
+        projectName: ws.row.project ?? null,
+        stalledAgent: pending.stalledOf(ws.info.id)
       }
     })
   )
@@ -323,7 +325,7 @@ export function registerHandlers(deps: Deps): void {
       if (!target) throw new UserError(`Zu „${source}“ gibt es keinen Orca-Workspace mit Agent.`)
       const prompt = reviewFeedbackPrompt({ target: ws.row.branch ?? ws.info.name, source, path, note })
       await memory.watch(target.id, { targetWorkspaceId: ws.info.id, source })
-      return deliverToAgent(orca, pending, target.id, prompt, settings.current.agent)
+      return deliverToAgent(orca, pending, target.id, prompt, settings.current.agent, ws.info.id)
     })
   )
 
@@ -336,12 +338,8 @@ export function registerHandlers(deps: Deps): void {
       const open = merge.conflicts.filter((f) => !merge.markerFree.includes(f))
       if (!open.length) throw new UserError('Alle Konflikte sind schon aufgelöst.')
       const prompt = resolveConflictsPrompt({ target: branch ?? ws.info.name, source: merge.source, files: open })
-      const launched = await orca.host.call('agent.launch', {
-        workspaceId: ws.info.id,
-        agent: settings.current.agent,
-        prompt
-      })
-      return { how: 'launched' as const, terminalId: launched.terminalId }
+      const terminalId = await launchAgent(orca, pending, ws.info.id, settings.current.agent, prompt)
+      return { how: 'launched' as const, terminalId }
     })
   )
 
@@ -413,8 +411,8 @@ export function registerHandlers(deps: Deps): void {
         exitCode: job.exitCode,
         tail: job.tail
       })
-      const launched = await orca.host.call('agent.launch', { workspaceId: ws.info.id, agent: settings.current.agent, prompt })
-      return { how: 'launched' as const, terminalId: launched.terminalId }
+      const terminalId = await launchAgent(orca, pending, ws.info.id, settings.current.agent, prompt)
+      return { how: 'launched' as const, terminalId }
     })
   )
 
@@ -427,6 +425,29 @@ export function registerHandlers(deps: Deps): void {
       await memory.setTestCommand(projectKey(ws), value || null)
       return { testCommand: value || null }
     })
+  )
+
+  orca.panels.handle(
+    'agent.retryPrompt',
+    guarded(deps, async ({ workspaceId }) => {
+      const ws = await workspaces.resolve(workspaceId)
+      try {
+        await pending.retry(ws.info.id)
+      } catch (error) {
+        throw new UserError(
+          `Orca hat das Eintippen abgelehnt (${(error as Error).message}). Bitte den Auftrag im Terminal des Agenten selbst abschicken.`
+        )
+      }
+      return { ok: true as const }
+    }, true)
+  )
+
+  orca.panels.handle(
+    'agent.dismissStalled',
+    guarded(deps, async ({ workspaceId }) => {
+      pending.dismissStalled((await workspaces.resolve(workspaceId)).info.id)
+      return { ok: true as const }
+    }, true)
   )
 
   orca.panels.handle(

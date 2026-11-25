@@ -11,6 +11,7 @@ const base: RepoState = {
   testCommand: null,
   suggestedTest: null,
   projectName: 'app',
+  stalledAgent: null,
   problem: null,
   branch: 'main',
   head: 'h0',
@@ -213,6 +214,80 @@ test('changes still parked after a merge are offered back', async () => {
   await view.press({ text: 'Zurückholen' })
   await view.settled()
   assert.equal(restores.length, 1)
+  await view.unmount()
+})
+
+test('a first load that fails shows why and offers to try again, instead of spinning forever', async () => {
+  let calls = 0
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => {
+        calls++
+        if (calls === 1) throw new Error('Git antwortet nicht.')
+        return { ...base, suggestedSource: '' }
+      },
+      'watch.get': () => ({ watch: null }),
+      'overview.list': () => ({ base: 'main', rows: [] })
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+  assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /Git antwortet nicht/)
+  await view.press({ text: 'Erneut laden' })
+  await view.settled()
+  assert.equal(calls, 2)
+  assert.equal(view.find({ text: 'Erneut laden' }), null)
+  await view.unmount()
+})
+
+test('an agent that never got its launch prompt is shown, and the prompt is typed on request', async () => {
+  const retries: unknown[] = []
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => ({ ...base, suggestedSource: '', stalledAgent: { terminalId: 'term-a' } }),
+      'watch.get': () => ({ watch: null }),
+      'overview.list': () => ({ base: 'main', rows: [] }),
+      'agent.retryPrompt': (input) => {
+        retries.push(input)
+        return { ok: true }
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+  assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /hat seinen Auftrag nicht bekommen/)
+  await view.press({ text: 'Auftrag eintippen' })
+  await view.settled()
+  assert.equal(retries.length, 1)
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('long file lists are paged: the first 200 rows, more on scrolling', async () => {
+  const many: Comparison = {
+    ...comparison,
+    preview: { clean: true, conflicts: [], upToDate: false, fastForward: false },
+    files: Array.from({ length: 450 }, (_, i) => ({ path: `f${i}.txt`, status: 'M', added: 1, deleted: 0 }))
+  }
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => base,
+      'repo.compare': () => many,
+      'watch.get': () => ({ watch: null })
+    }
+  })
+  const view = await mount(panel, { host })
+  await view.settled()
+  const tree = JSON.stringify(view.tree())
+  // f350 is past the first page (and past the note's file choice, which lists 300).
+  assert.match(tree, /f199\.txt/)
+  assert.ok(!/f350\.txt/.test(tree))
+  await view.loadMore({ label: 'Geänderte Dateien (Enter oder Doppelklick öffnet den Diff)' })
+  await view.settled()
+  assert.match(JSON.stringify(view.tree()), /f350\.txt/)
   await view.unmount()
 })
 
