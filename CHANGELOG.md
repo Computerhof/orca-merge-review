@@ -7,6 +7,11 @@ oder einer Capability-Erweiterung, die Nutzer neu freigeben müssen.
 
 ## [Unreleased]
 
+### Repository
+- **Öffentliche Commit-Identität erzwungen:** Der Pre-commit-Hook verlangt eine GitHub-noreply-Adresse, statt nur
+  bekannte private Muster abzuweisen. Die CI prüft zusätzlich jeden neuen Commit (Autor, Committer,
+  `Co-authored-by`, Namen und Commit-Text) mit `scripts/check-private.mjs --commits`, auch wenn er ohne Hook entstand.
+
 ## [0.3.0] - 2026-11-24
 
 ### Geändert (Bruch)

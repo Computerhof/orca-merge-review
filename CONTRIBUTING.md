@@ -10,9 +10,10 @@ orca plugin types .              # erzeugt .orca/types (nicht committen)
 orca plugin dev watch . --check  # lädt das Plugin in Orca; Speichern lädt neu
 ```
 
-Beobachtet mit Orca 1.4.271: Nach Code-Änderungen verlangt ein Entwicklungsordner mit `trusted-worker`
-erneut eine Freigabe (`approval_required`), auch ohne neue Rechte. Prüfe die angezeigte Rechteliste und
-starte dann neu mit `--approve <fingerprint>`.
+Beobachtet mit Orca 1.4.271 bis 1.4.273: Nach jeder Änderung im Plugin-Ordner verlangt ein Entwicklungsordner
+mit `trusted-worker` erneut eine Freigabe (Status `pending`), auch ohne neue Rechte. Das gilt auch für git-ignorierte
+Dateien wie `TASKS.md` oder `scratch/`. Prüfe die angezeigte Rechteliste und gib dann mit dem Fingerabdruck frei,
+den Orca ausgibt: `orca plugin enable local.merge-review --approve <fingerprint>`.
 
 ## Vor jedem PR
 
@@ -36,6 +37,16 @@ Das Orca-Runtime gibt es in CI nicht. `orca plugin test/check` laufen deshalb lo
 
 ## Privates bleibt privat
 
-Der Pre-commit-Hook (`scripts/check-private.mjs`) blockiert Secrets, persönliche Pfade und eine private
-Commit-Identität. Eigene Marker (Namen, Firmen-Domains) kommen in `.private-patterns`; die Datei ist git-ignoriert,
-eine Regex pro Zeile. `TASKS.md`, `.env*`, `.claude/` und `.orca/` gehören nie ins Repo.
+Die Historie ist öffentlich. Commits tragen deshalb nur eine GitHub-noreply-Adresse:
+
+```sh
+git config user.email "<id>+<login>@users.noreply.github.com"
+```
+
+Der Pre-commit-Hook (`scripts/check-private.mjs`) blockiert Secrets, persönliche Pfade und jede Commit-Adresse,
+die keine noreply-Adresse ist. Eigene Marker (Namen, Firmen-Domains) kommen in `.private-patterns`; die Datei ist
+git-ignoriert, eine Regex pro Zeile. `TASKS.md`, `.env*`, `.claude/` und `.orca/` gehören nie ins Repo.
+
+Die CI wiederholt das für Commits, die ohne Hook entstanden sind (`--commits <base>..<head>`): Autor, Committer
+und `Co-authored-by` müssen noreply sein (Personen, Bots wie `dependabot[bot]`, `noreply@github.com`,
+`noreply@anthropic.com`), und Namen sowie Commit-Texte dürfen keine Secrets oder persönlichen Pfade enthalten.

@@ -46,3 +46,15 @@ jobs:
       - uses: trufflesecurity/trufflehog@d232362a64a09a9e7d58267b8f5acef00ae90e23 # v3.100.0
         with:
           extra_args: --results=verified,unknown
+      # Commits made without the local pre-commit hook: only public noreply identities and
+      # no secrets or personal paths in names and messages (the history is public).
+      - name: Commit identities
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            node scripts/check-private.mjs --commits "$HEAD_SHA"
+          else
+            node scripts/check-private.mjs --commits "$BASE_SHA..$HEAD_SHA"
+          fi
