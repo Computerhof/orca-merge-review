@@ -42,9 +42,23 @@ declare module 'orca' {
     'ui.sourceControl': { input: Ws; output: { ok: true } }
     /** The panel reports Orca's UI language; the worker uses it for its own texts and remembers it. */
     'ui.locale': { input: { locale: string }; output: { locale: 'de' | 'en' } }
-    /** git merge --abort (or reset --merge after a squash). */
+    /**
+     * E9: rebases the current branch onto `source` (git rebase, not interactive). Same preconditions
+     * as merge.run (clean tree or `park`, no operation under way, a branch checked out).
+     */
+    'rebase.run': { input: Ws & { source: string; park?: boolean }; output: MergeOutcome }
+    /**
+     * E11: applies `commits` (full or short hashes, any order) to the current branch with
+     * `git cherry-pick -x`, oldest first. Same preconditions as merge.run.
+     */
+    'pick.run': { input: Ws & { commits: string[]; park?: boolean }; output: MergeOutcome }
+    /** Rebase / cherry-pick: continues once nothing is unmerged (`--continue`); may stop again with conflicts. */
+    'op.continue': { input: Ws; output: MergeOutcome }
+    /** Rebase / cherry-pick: skips the commit being applied (`--skip`). */
+    'op.skip': { input: Ws; output: MergeOutcome }
+    /** Aborts what is under way: merge --abort (or reset --merge after a squash), rebase --abort, cherry-pick --abort. */
     'merge.abort': { input: Ws; output: { ok: true } }
-    /** Concludes the ongoing merge with a commit once nothing is unmerged. */
+    /** Concludes the ongoing merge with a commit once nothing is unmerged (merge only; rebase and cherry-pick use op.continue). */
     'merge.commit': { input: Ws & { message?: string }; output: { hash: string } }
     /** Undoes the last merge this plugin made here, if nothing happened since. */
     'merge.undo': { input: Ws; output: { ok: true } }

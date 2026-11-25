@@ -1,5 +1,6 @@
 // Reads an agent's tool call and decides whether it touches Git, and whether it would destroy an
-// ongoing merge. Pure and synchronous: Orca gives a hook 2 s, so the decision never waits on Git.
+// ongoing merge, rebase or cherry-pick. Pure and synchronous: Orca gives a hook 2 s, so the
+// decision never waits on Git.
 //
 // The command is split like a shell would (quotes, escapes, `;` `&&` `||` `|` `&`, newlines,
 // parentheses), so text inside quotes ("git rebase" in a commit message) is never read as a
@@ -7,6 +8,7 @@
 // A guard rail, not a security boundary: a determined process can still get around it.
 
 import { m } from './messages.ts'
+import type { OperationKind } from '../types.ts'
 
 /** The command text of a shell-like tool call, whatever shape the agent uses; null otherwise. */
 export function commandOf(input: unknown): string | null {
@@ -139,40 +141,57 @@ function hasFlag(args: readonly string[], long: string[], short?: string): boole
 
 const WHOLE_TREE = new Set(['.', './', ':/', ':/.', ':(top)', '*', ':(top).'])
 const RESOLVING = ['--ours', '--theirs', '--merge', '-m', '--conflict']
+/** Options that steer a running rebase, cherry-pick, revert or `git am`: the human's call (E12). */
+const CONTROL = ['--abort', '--continue', '--skip', '--quit', '--edit-todo']
 
-function duringMerge({ sub, args }: GitCall): string | null {
+/**
+ * The rules while a merge, rebase or cherry-pick is under way (E12: the same for all three).
+ * Resolving stays possible: `git add`, `git checkout --ours <file>`, `git rebase --show-current-patch`.
+ */
+function duringOperation({ sub, args }: GitCall, op: OperationKind): string | null {
   const options = args.filter((a) => a.startsWith('-'))
   const sep = args.indexOf('--')
   const plain = (sep >= 0 ? args.slice(0, sep) : args).filter((a) => !a.startsWith('-'))
   const paths = sep >= 0 ? args.slice(sep + 1) : plain
   if (args.includes('--help') || args.includes('-h')) return null
+  const control = CONTROL.find((c) => hasFlag(args, [c]))
   switch (sub) {
     case 'reset':
-      if (hasFlag(args, ['--hard'])) return m.guardResetHard
-      if (hasFlag(args, ['--merge', '--keep'])) return m.guardResetMerge
+      if (hasFlag(args, ['--hard'])) return m.guardResetHard(op)
+      if (hasFlag(args, ['--merge', '--keep'])) return m.guardResetMerge(op)
       return null
     case 'merge':
-      if (hasFlag(args, ['--abort', '--quit'])) return m.guardMergeAbort
+      if (hasFlag(args, ['--abort', '--quit'])) return op === 'merge' ? m.guardMergeAbort : m.guardOpControl(`git merge ${control ?? '--abort'}`, op)
       return null
     case 'checkout':
       if (hasFlag(args, ['--force'], 'f')) return m.guardCheckoutForce
       if (paths.some((p) => WHOLE_TREE.has(p))) return m.guardWholeTree
-      if (hasFlag(args, ['-b', '-B', '--orphan', '--detach'])) return m.guardSwitchBranch
-      if (sep < 0 && plain.length === 1 && !options.some((o) => RESOLVING.includes(o))) return m.guardSwitchBranch
+      if (hasFlag(args, ['-b', '-B', '--orphan', '--detach'])) return m.guardSwitchBranch(op)
+      if (sep < 0 && plain.length === 1 && !options.some((o) => RESOLVING.includes(o))) return m.guardSwitchBranch(op)
       return null
     case 'restore':
       if (paths.some((p) => WHOLE_TREE.has(p))) return m.guardWholeTree
       return null
     case 'switch':
-      return m.guardSwitchBranch
+      return m.guardSwitchBranch(op)
     case 'clean':
       if (hasFlag(args, ['--force'], 'f')) return m.guardCleanForce
       return null
     case 'stash':
       if (plain[0] === 'list' || plain[0] === 'show') return null
-      return m.guardStash
+      return m.guardStash(op)
     case 'rebase':
-      return m.guardRebase
+      if (control) return m.guardOpControl(`git rebase ${control}`, op)
+      // Shows the commit being replayed: reading, and exactly what a conflict agent needs.
+      if (op === 'rebase' && hasFlag(args, ['--show-current-patch'])) return null
+      return m.guardRebase(op)
+    case 'cherry-pick':
+      if (control) return m.guardOpControl(`git cherry-pick ${control}`, op)
+      return m.guardCherryPick(op)
+    case 'revert':
+    case 'am':
+      if (control) return m.guardOpControl(`git ${sub} ${control}`, op)
+      return null
     default:
       return null
   }
@@ -187,16 +206,19 @@ function always({ sub, args }: GitCall): string | null {
 }
 
 export interface GuardContext {
-  /** A merge is in progress in the agent's workspace. */
+  /** Something is under way in the agent's workspace: a merge, rebase or cherry-pick. */
   merging: boolean
+  /** What is under way; without it, `merging` means a merge. */
+  operation?: OperationKind | null
 }
 
 /** Null when the call may run; otherwise the reason it is refused, for the agent to read. */
 export function guardDecision(command: string, ctx: GuardContext): string | null {
+  const op: OperationKind | null = ctx.operation ?? (ctx.merging ? 'merge' : null)
   for (const call of gitCalls(command)) {
-    const why = always(call) ?? (ctx.merging ? duringMerge(call) : null)
+    const why = always(call) ?? (op ? duringOperation(call, op) : null)
     if (why) {
-      return m.guardBlocked(why, ctx.merging)
+      return m.guardBlocked(why, op)
     }
   }
   return null

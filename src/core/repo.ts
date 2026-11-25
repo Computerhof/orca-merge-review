@@ -5,13 +5,16 @@ import type {
   CommitRow,
   ConflictFile,
   FileChange,
+  MergeInProgress,
   MergeMode,
   MergeOutcome,
   MergePreview,
   ConflictChoice,
+  OperationKind,
+  RebaseImpact,
   RepoState
 } from '../types.ts'
-import { git, GitError, LONG_RUNNING_MS, type GitRunner, type RunOptions } from '../git/runner.ts'
+import { git, GitError, LONG_RUNNING_MS, type GitResult, type GitRunner, type RunOptions } from '../git/runner.ts'
 import { conflictsOf, displayLines, parseConflicts, resolveConflict } from './conflicts.ts'
 import { m } from './messages.ts'
 
@@ -34,11 +37,27 @@ export class UserError extends Error {
 const MAX_COMMITS = 200
 const MAX_PATCH = 400 * 1024
 
+/** Files and folders Git writes into a worktree's own Git directory while something is under way. */
+const MARKERS = ['MERGE_HEAD', 'SQUASH_MSG', 'rebase-merge', 'rebase-apply', 'REBASE_HEAD', 'CHERRY_PICK_HEAD', 'sequencer'] as const
+type Marker = (typeof MARKERS)[number]
+
+/** What the marker files say is under way; only file reads, no Git call. */
+type Markers =
+  | { kind: 'rebase'; dir: 'rebase-merge' | 'rebase-apply' }
+  | { kind: 'cherry-pick'; head: string | null; todo: string[] | null }
+  | { kind: 'merge'; head: string }
+  | null
+
+/** A full or abbreviated commit id as Git writes it into its marker files. */
+const HEX = /^[0-9a-f]{4,64}$/
+
 export class Repo {
   private readonly runner: GitRunner
   private readonly files: FileAccess
   /** The repository's top level; every path the panel sends is relative to it. */
   readonly root: string
+  /** Absolute paths of Git's marker files for this worktree, asked once (`git rev-parse --git-path`). */
+  private markerPaths: Promise<Record<Marker, string>> | null = null
 
   private constructor(runner: GitRunner, files: FileAccess, root: string) {
     this.runner = runner
@@ -83,14 +102,165 @@ export class Repo {
     }
   }
 
-  /** Only the merge part of `state()`: cheap enough to poll (two or three Git calls outside a merge). */
+  /**
+   * Only the operation part of `state()`: what is under way (merge, rebase, cherry-pick), cheap
+   * enough to poll. Outside any operation that is one Git call (unmerged files) plus a few reads
+   * of marker files; the details are asked for only while something is under way.
+   * Order: rebase, then cherry-pick, then merge. A rebase or cherry-pick that stopped and is not
+   * continued yet counts as under way even when every conflict is resolved (or there was none).
+   */
   async mergeSummary(): Promise<CoreState['merge']> {
-    const [unmerged, mergeHead] = await Promise.all([this.unmerged(), this.mergeHead()])
+    const [unmerged, op] = await Promise.all([this.unmerged(), this.markers()])
+    if (op?.kind === 'rebase') return this.rebaseSummary(op.dir, unmerged)
+    if (op?.kind === 'cherry-pick') return this.pickSummary(op.head, op.todo, unmerged)
+    const mergeHead = op?.kind === 'merge' ? op.head : null
     if (mergeHead === null && unmerged.length === 0 && !(await this.squashPending())) return null
+    const [source, branch, markerFree] = await Promise.all([
+      mergeHead ? this.describe(mergeHead) : Promise.resolve(m.squashLabel),
+      this.currentBranch(),
+      this.markerFree(unmerged)
+    ])
     return {
-      source: mergeHead ? await this.describe(mergeHead) : m.squashLabel,
+      kind: 'merge',
+      source,
       conflicts: unmerged,
-      markerFree: await this.markerFree(unmerged)
+      markerFree,
+      step: null,
+      sides: { ours: branch ?? 'HEAD', theirs: source },
+      branch: null
+    }
+  }
+
+  /** What is under way, by kind only; null when nothing is. Cheaper than `mergeSummary()`. */
+  async operation(): Promise<OperationKind | null> {
+    const op = await this.markers()
+    if (op) return op.kind
+    return (await this.unmerged()).length || (await this.squashPending()) ? 'merge' : null
+  }
+
+  /** Absolute paths of the marker files; one Git call per Repo, then cached. */
+  private paths(): Promise<Record<Marker, string>> {
+    this.markerPaths ??= this.git(['rev-parse', '--path-format=absolute', ...MARKERS.flatMap((n) => ['--git-path', n])])
+      .then((r) => {
+        const lines = r.stdout.split(/\r?\n/)
+        return Object.fromEntries(MARKERS.map((n, i) => [n, (lines[i] ?? '').trim()])) as Record<Marker, string>
+      })
+      .catch((error: unknown) => {
+        this.markerPaths = null
+        throw error
+      })
+    return this.markerPaths
+  }
+
+  /** A marker file (or a file inside a marker folder), trimmed; null when it does not exist. */
+  private async readMarker(name: Marker, file?: string): Promise<string | null> {
+    const base = (await this.paths())[name]
+    if (!base) return null
+    const text = await this.files.read(file ? this.files.join(base, file) : base)
+    return text === null ? null : text.trim()
+  }
+
+  /** What is under way according to the marker files alone (file reads, no Git call). */
+  private async markers(): Promise<Markers> {
+    const [ontoMerge, headNameMerge, rebasing, cherry, todo, mergeHead] = await Promise.all([
+      this.readMarker('rebase-merge', 'onto'),
+      this.readMarker('rebase-merge', 'head-name'),
+      // rebase-apply is also used by `git am`; only the file `rebasing` marks a rebase (apply backend).
+      this.readMarker('rebase-apply', 'rebasing'),
+      this.readMarker('CHERRY_PICK_HEAD'),
+      this.readMarker('sequencer', 'todo'),
+      this.readMarker('MERGE_HEAD')
+    ])
+    if (ontoMerge !== null || headNameMerge !== null) return { kind: 'rebase', dir: 'rebase-merge' }
+    if (rebasing !== null) return { kind: 'rebase', dir: 'rebase-apply' }
+    // The sequencer also runs `git revert`; only pick lines make it a cherry-pick.
+    const picks = todo === null ? [] : todo.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^(pick|p)\s/.test(l))
+    const head = firstId(cherry)
+    if (head || picks.length) return { kind: 'cherry-pick', head, todo: picks.length ? picks : null }
+    const merge = firstId(mergeHead)
+    return merge ? { kind: 'merge', head: merge } : null
+  }
+
+  /** Short hash and subject of a commit Git named in a marker file; null when it is not one. */
+  private async commitInfo(rev: string | null): Promise<{ short: string; subject: string } | null> {
+    if (!rev || !HEX.test(rev)) return null
+    const r = await this.git(['log', '-1', '--format=%h%x1f%s', '--end-of-options', rev, '--'], [0, 128])
+    if (r.code !== 0) return null
+    const [short, subject] = r.stdout.trim().split('\x1f')
+    return short ? { short, subject: subject ?? '' } : null
+  }
+
+  private async rebaseSummary(dir: 'rebase-merge' | 'rebase-apply', unmerged: string[]): Promise<MergeInProgress> {
+    const merge = dir === 'rebase-merge'
+    const read = (file: string) => this.readMarker(dir, file)
+    const [onto, headName, num, end, stopped, rebaseHead] = await Promise.all([
+      read('onto'),
+      read('head-name'),
+      read(merge ? 'msgnum' : 'next'),
+      read(merge ? 'end' : 'last'),
+      read(merge ? 'stopped-sha' : 'original-commit'),
+      this.readMarker('REBASE_HEAD')
+    ])
+    // REBASE_HEAD is the commit Git stopped on; stopped-sha may be left over from an earlier stop.
+    const current = firstId(rebaseHead) ?? firstId(stopped)
+    const ontoId = firstId(onto)
+    const [ontoName, info, markerFree] = await Promise.all([
+      ontoId ? this.describe(ontoId) : Promise.resolve('?'),
+      this.commitInfo(current),
+      this.markerFree(unmerged)
+    ])
+    const branch = headName?.startsWith('refs/heads/') ? headName.slice('refs/heads/'.length) : null
+    const total = Number(end)
+    const at = Number(num)
+    return {
+      kind: 'rebase',
+      source: ontoName,
+      conflicts: unmerged,
+      markerFree,
+      step:
+        Number.isInteger(total) && total > 0
+          ? { current: Math.min(Math.max(at || 1, 1), total), total, commit: info?.short ?? null, subject: info?.subject ?? null }
+          : null,
+      // Git's "ours" during a rebase is the base being rebased onto, "theirs" the replayed commit.
+      sides: { ours: ontoName, theirs: info ? `${info.short} ${info.subject}` : (branch ?? 'HEAD') },
+      branch
+    }
+  }
+
+  /**
+   * A cherry-pick. Git keeps no count for a running sequence: `sequencer/todo` lists the commit it
+   * stopped on plus those still to come, `sequencer/head` is HEAD before the first pick. So the
+   * step is approximated: done = commits made since `sequencer/head`, current = done + 1,
+   * total = done + picks in the todo list (a skipped commit drops out of both numbers).
+   * A single cherry-pick writes no sequencer: 1 of 1.
+   */
+  private async pickSummary(head: string | null, todo: string[] | null, unmerged: string[]): Promise<MergeInProgress> {
+    // CHERRY_PICK_HEAD is gone when someone concluded the pick with `git commit` mid-sequence.
+    const current = head ?? firstId(todo?.[0]?.split(/\s+/)[1] ?? null)
+    const doneCount = async (): Promise<number> => {
+      if (!todo) return 0
+      const start = firstId(await this.readMarker('sequencer', 'head'))
+      if (!start) return 0
+      const r = await this.git(['rev-list', '--count', `${start}..HEAD`], [0, 128])
+      return r.code === 0 ? Number(r.stdout.trim()) || 0 : 0
+    }
+    const [info, branch, done, markerFree] = await Promise.all([
+      this.commitInfo(current),
+      this.currentBranch(),
+      doneCount(),
+      this.markerFree(unmerged)
+    ])
+    const short = info?.short ?? current?.slice(0, 7) ?? '?'
+    const commit = info?.short ?? null
+    const subject = info?.subject ?? null
+    return {
+      kind: 'cherry-pick',
+      source: short,
+      conflicts: unmerged,
+      markerFree,
+      step: todo ? { current: done + 1, total: done + todo.length, commit, subject } : { current: 1, total: 1, commit, subject },
+      sides: { ours: branch ?? 'HEAD', theirs: info ? `${info.short} ${info.subject}` : short },
+      branch: null
     }
   }
 
@@ -174,11 +344,6 @@ export class Repo {
     return file
   }
 
-  private async mergeHead(): Promise<string | null> {
-    const r = await this.git(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], [0, 1])
-    return r.code === 0 ? r.stdout.trim() : null
-  }
-
   private async describe(rev: string): Promise<string> {
     const r = await this.git(
       ['name-rev', '--name-only', '--refs=refs/heads/*', '--refs=refs/remotes/*', rev],
@@ -243,12 +408,34 @@ export class Repo {
   async compare(source: string, target = 'HEAD'): Promise<Comparison> {
     const [src, tgt] = await Promise.all([this.verify(source), this.verify(target)])
     const [mergeBase, counts] = await Promise.all([this.mergeBase(tgt, src), this.aheadBehind(tgt, src)])
-    const [incoming, files, preview] = await Promise.all([
+    const [incoming, files, preview, rebase] = await Promise.all([
       counts.ahead ? this.commits(`${tgt}..${src}`) : Promise.resolve([]),
       this.changedFiles(mergeBase ?? tgt, src),
-      this.preview(tgt, src, counts, mergeBase !== null)
+      this.preview(tgt, src, counts, mergeBase !== null),
+      // The rebase is always of the current branch; for another target there is nothing to say.
+      target === 'HEAD' ? this.rebaseImpact(src, counts.behind) : Promise.resolve(null)
     ])
-    return { source, target, mergeBase, incoming, ahead: counts.ahead, behind: counts.behind, files, preview }
+    return { source, target, mergeBase, incoming, ahead: counts.ahead, behind: counts.behind, files, preview, rebase }
+  }
+
+  /**
+   * E10: what rebasing the current branch onto `onto` rewrites, and how much of that its upstream
+   * already has (then a force push is needed afterwards). Null when HEAD is detached.
+   * `commits`: the number of commits HEAD has that `onto` lacks, when the caller already knows it.
+   */
+  async rebaseImpact(onto: string, commits?: number): Promise<RebaseImpact | null> {
+    const [branch, ontoId] = await Promise.all([this.currentBranch(), this.verify(onto)])
+    if (!branch) return null
+    const count = async (args: string[]) => Number((await this.git(['rev-list', '--count', ...args])).stdout.trim()) || 0
+    const [n, up] = await Promise.all([
+      commits ?? count([`${ontoId}..HEAD`]),
+      this.git(['rev-parse', '--abbrev-ref', '@{upstream}'], [0, 128])
+    ])
+    const upstream = up.code === 0 ? up.stdout.trim() || null : null
+    if (!upstream || n === 0) return { commits: n, pushed: 0, upstream }
+    // Commits to rewrite that the upstream does not have yet; the rest is already pushed.
+    const local = await count(['HEAD', `^${ontoId}`, '^@{upstream}'])
+    return { commits: n, pushed: Math.max(0, n - local), upstream }
   }
 
   /** Commits only `source` has (ahead) and only `target` has (behind), in one Git call. */
@@ -337,16 +524,15 @@ export class Repo {
     return (await this.git(['rev-parse', 'HEAD'])).stdout.trim()
   }
 
-  async merge(
-    source: string,
-    mode: MergeMode,
-    message?: string,
-    options: { showBase?: boolean } = {}
-  ): Promise<MergeOutcome> {
-    await this.verify(source)
-    if ((await this.mergeHead()) || (await this.unmerged()).length) {
-      throw new UserError(m.mergeAlreadyRunning)
-    }
+  /** Refuses while a merge, rebase or cherry-pick is under way, naming it. */
+  private async ensureIdle(): Promise<void> {
+    const kind = await this.operation()
+    if (kind) throw new UserError(kind === 'merge' ? m.mergeAlreadyRunning : m.operationRunning(kind))
+  }
+
+  /** The preconditions every operation shares: nothing under way, no tracked changes, a branch checked out. */
+  private async ensureReady(): Promise<void> {
+    await this.ensureIdle()
     const dirty = await this.dirtyFiles(true)
     if (dirty.length) {
       throw new UserError(m.dirtyTree(dirty.length))
@@ -354,10 +540,24 @@ export class Repo {
     if (!(await this.currentBranch())) {
       throw new UserError(m.detachedHead)
     }
+  }
+
+  /** diff3 writes the common ancestor into each conflict block, so the review tab can show it. */
+  private style(options: { showBase?: boolean }): string[] {
+    return options.showBase ? ['-c', 'merge.conflictStyle=diff3'] : []
+  }
+
+  async merge(
+    source: string,
+    mode: MergeMode,
+    message?: string,
+    options: { showBase?: boolean } = {}
+  ): Promise<MergeOutcome> {
+    await this.verify(source)
+    await this.ensureReady()
 
     const msg = message?.trim()
-    // diff3 writes the common ancestor into each conflict block, so the review tab can show it.
-    const args = options.showBase ? ['-c', 'merge.conflictStyle=diff3', 'merge'] : ['merge']
+    const args = [...this.style(options), 'merge']
     if (mode === 'no-ff') args.push('--no-ff', '--no-edit')
     // Explicit, so `merge.ff` in the user's config cannot turn the choice into something else.
     if (mode === 'ff') args.push('--ff', '--no-edit')
@@ -392,8 +592,123 @@ export class Repo {
     return { status: 'merged', message: m.merged(source), conflicts: [] }
   }
 
+  // ---------------------------------------------------------------- rebase and cherry-pick (E9–E12)
+
+  /**
+   * E9: rebases the current branch onto `onto` (`git rebase`, not interactive). Same preconditions
+   * as a merge. Stops with `conflicts` like a merge; the person then continues, skips or aborts.
+   */
+  async rebase(onto: string, options: { showBase?: boolean } = {}): Promise<MergeOutcome> {
+    const name = onto.trim()
+    await this.verify(name)
+    await this.ensureReady()
+    const before = await this.head()
+    // --no-autostash: a `rebase.autoStash` in the user's config must not stash anything behind our back.
+    const r = await this.long([...this.style(options), 'rebase', '--no-autostash', '--end-of-options', name], [0, 1, 128])
+    return this.settle('rebase', r, async () =>
+      (await this.head()) === before
+        ? { status: 'up-to-date', message: m.rebaseUpToDate(name), conflicts: [] }
+        : { status: 'rebased', message: m.rebased(name), conflicts: [] }
+    )
+  }
+
+  /**
+   * E11: applies `commits` (any order, full or short ids) with `git cherry-pick -x`, oldest first.
+   *
+   * The order is the topological order of their history (`git rev-list --topo-order --reverse
+   * <commits> ^HEAD`), not commit dates (`--no-walk=sorted`): dates can tie (several commits in
+   * one second) or run backwards after a rebase or amend, while parents always come before their
+   * children in topological order. Commits HEAD already contains and merge commits are refused.
+   */
+  async cherryPick(commits: readonly string[], options: { showBase?: boolean } = {}): Promise<MergeOutcome> {
+    if (!commits.length) throw new UserError(m.pickNothing)
+    const ids: string[] = []
+    for (const c of commits) {
+      const id = await this.verify(c)
+      if (!ids.includes(id)) ids.push(id)
+    }
+    await this.ensureReady()
+    const merges = (await this.git(['rev-list', '--no-walk', '--min-parents=2', ...ids])).stdout.trim()
+    if (merges) throw new UserError(m.pickMergeCommit(merges.split('\n')[0].slice(0, 7)))
+    const walk = await this.git(['rev-list', '--topo-order', '--reverse', ...ids, '^HEAD'])
+    const order = walk.stdout.split('\n').map((l) => l.trim()).filter((id) => ids.includes(id))
+    const contained = ids.find((id) => !order.includes(id))
+    if (contained) throw new UserError(m.pickAlreadyContained(contained.slice(0, 7)))
+
+    const r = await this.long([...this.style(options), 'cherry-pick', '-x', ...order], [0, 1, 128])
+    return this.settle('cherry-pick', r, async () => ({ status: 'picked', message: m.picked(order.length), conflicts: [] }))
+  }
+
+  /**
+   * Rebase / cherry-pick: goes on once nothing is unmerged (`--continue`). The runner sets
+   * `core.editor=true` and GIT_EDITOR=true, so Git keeps the commit message without opening an
+   * editor. A resolution that leaves the commit empty is refused with a hint to skip it
+   * (cherry-pick refuses that itself; a rebase drops such a commit on its own).
+   */
+  async continueOp(options: { showBase?: boolean } = {}): Promise<MergeOutcome> {
+    const op = await this.runningStep()
+    if (op.conflicts.length) {
+      throw new UserError(m.unresolvedFiles(op.conflicts.length, op.conflicts.slice(0, 5).join(', ')))
+    }
+    const r = await this.long([...this.style(options), op.kind, '--continue'], [0, 1, 128])
+    if (r.code !== 0 && (await this.operation()) === op.kind && !(await this.unmerged()).length) {
+      const out = `${r.stdout}\n${r.stderr}`
+      if (/now empty|nothing to commit|no changes/i.test(out)) throw new UserError(m.opEmpty(op.kind))
+    }
+    return this.settle(op.kind, r, async () => this.finished(op.kind, op.source))
+  }
+
+  /** Rebase / cherry-pick: leaves out the commit being applied (`--skip`) and goes on. */
+  async skipOp(options: { showBase?: boolean } = {}): Promise<MergeOutcome> {
+    const op = await this.runningStep()
+    const r = await this.long([...this.style(options), op.kind, '--skip'], [0, 1, 128])
+    return this.settle(op.kind, r, async () => {
+      const done = this.finished(op.kind, op.source)
+      return { ...done, message: `${m.commitSkipped} ${done.message}` }
+    })
+  }
+
+  /** The rebase or cherry-pick under way, for continue and skip; refuses otherwise. */
+  private async runningStep(): Promise<MergeInProgress & { kind: 'rebase' | 'cherry-pick' }> {
+    const op = await this.mergeSummary()
+    if (!op) throw new UserError(m.noStepOperation)
+    if (op.kind === 'merge') throw new UserError(m.mergeUseFinish)
+    return op as MergeInProgress & { kind: 'rebase' | 'cherry-pick' }
+  }
+
+  private finished(kind: 'rebase' | 'cherry-pick', source: string): MergeOutcome {
+    return kind === 'rebase'
+      ? { status: 'rebased', message: m.rebased(source), conflicts: [] }
+      : { status: 'picked', message: m.pickFinished, conflicts: [] }
+  }
+
+  /**
+   * After a rebase or cherry-pick command: stopped on conflicts, stopped for another reason
+   * (an empty commit, an untracked file in the way; still under way, `conflicts` empty), failed
+   * without starting (a GitError), or done.
+   */
+  private async settle(kind: 'rebase' | 'cherry-pick', r: GitResult, done: () => Promise<MergeOutcome>): Promise<MergeOutcome> {
+    const [conflicts, running] = await Promise.all([this.unmerged(), this.operation()])
+    if (conflicts.length) {
+      return { status: 'conflicts', message: m.conflictFiles(conflicts.length), conflicts }
+    }
+    const detail = gitDetail(r)
+    if (running === kind) {
+      const message = /now empty|nothing to commit/i.test(`${r.stdout}\n${r.stderr}`) ? m.opEmpty(kind) : m.opStopped(kind, detail)
+      return { status: 'conflicts', message, conflicts: [] }
+    }
+    if (r.code !== 0) {
+      throw new GitError(m.operationNotPossible(kind, detail), r)
+    }
+    return done()
+  }
+
+  /** Aborts what is under way: merge --abort (reset --merge after a squash), rebase --abort, cherry-pick --abort. */
   async abort(): Promise<void> {
-    if (await this.mergeHead()) await this.git(['merge', '--abort'])
+    const op = await this.markers()
+    if (op?.kind === 'rebase') await this.long(['rebase', '--abort'])
+    else if (op?.kind === 'cherry-pick') await this.long(['cherry-pick', '--abort'])
+    else if (op?.kind === 'merge') await this.git(['merge', '--abort'])
     else if ((await this.unmerged()).length || (await this.squashPending())) await this.git(['reset', '--merge'])
     else throw new UserError(m.noMergeRunning)
   }
@@ -403,19 +718,20 @@ export class Repo {
    * SQUASH_MSG plus staged changes. Without this the panel would lose track of it.
    */
   private async squashPending(): Promise<boolean> {
-    const r = await this.git(['rev-parse', '--path-format=absolute', '--git-path', 'SQUASH_MSG'])
-    if ((await this.files.read(r.stdout.trim())) === null) return false
+    if ((await this.readMarker('SQUASH_MSG')) === null) return false
     const staged = await this.git(['diff', '--cached', '--quiet'], [0, 1])
     return staged.code === 1
   }
 
   /**
-   * Undoes a merge this plugin just made: HEAD goes back to `before`. Refuses unless HEAD is still
-   * exactly `after` and the tree is clean, so it never throws away anything made since.
+   * Undoes a merge, rebase or cherry-pick this plugin just finished: HEAD goes back to `before`.
+   * Refuses unless HEAD is still exactly `after` and the tree is clean, so it never throws away
+   * anything made since.
    */
   async undoMerge(before: string, after: string): Promise<void> {
-    if ((await this.mergeHead()) || (await this.unmerged()).length) {
-      throw new UserError(m.mergeRunningUseAbort)
+    const kind = await this.operation()
+    if (kind) {
+      throw new UserError(kind === 'merge' ? m.mergeRunningUseAbort : m.operationRunningUseAbort(kind))
     }
     if ((await this.head()) !== after) {
       throw new UserError(m.branchChangedSinceMerge)
@@ -427,7 +743,10 @@ export class Repo {
     await this.git(['reset', '--merge', before])
   }
 
+  /** Concludes a merge with a commit. A rebase or cherry-pick goes on with `continueOp()` instead. */
   async commitMerge(message?: string): Promise<string> {
+    const kind = (await this.markers())?.kind
+    if (kind === 'rebase' || kind === 'cherry-pick') throw new UserError(m.useContinue(kind))
     const left = await this.unmerged()
     if (left.length) {
       throw new UserError(m.unresolvedFiles(left.length, left.slice(0, 5).join(', ')))
@@ -553,6 +872,22 @@ export class Repo {
     }
     await this.git(['add', '-A', '--', rel])
   }
+}
+
+/** The first word of a marker file when it is a commit id, else null (nothing else is handed to Git). */
+function firstId(text: string | null): string | null {
+  const id = text?.trim().split(/\s/)[0] ?? ''
+  return HEX.test(id) ? id : null
+}
+
+/** Git's own explanation of a failed or stopped command, without its hints, in a few lines. */
+function gitDetail(r: GitResult): string {
+  return (r.stderr || r.stdout)
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('hint:'))
+    .slice(0, 4)
+    .join(' ')
 }
 
 /** Repository-relative, forward slashes, never absolute and never leaving the repository. */

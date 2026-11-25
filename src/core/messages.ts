@@ -3,6 +3,24 @@
 // so a language change takes effect at once. The German texts are the originals: tests and users
 // rely on their exact wording.
 import { messages, plural } from '../i18n/index.ts'
+import type { OperationKind } from '../types.ts'
+
+// Names of what is under way, per language (plain data, not texts read at load time).
+const DE_OP: Record<OperationKind, string> = { merge: 'Merge', rebase: 'Rebase', 'cherry-pick': 'Cherry-Pick' }
+const EN_OP: Record<OperationKind, string> = { merge: 'merge', rebase: 'rebase', 'cherry-pick': 'cherry-pick' }
+const EN_OP_TITLE: Record<OperationKind, string> = { merge: 'Merge', rebase: 'Rebase', 'cherry-pick': 'Cherry-pick' }
+const DE_DURING: Record<OperationKind, string> = {
+  merge: ' Es läuft ein Merge; der Mensch schließt ihn im Merge-&-Review-Panel ab oder bricht ihn dort ab.',
+  rebase: ' Es läuft ein Rebase; der Mensch setzt ihn im Merge-&-Review-Panel fort oder bricht ihn dort ab.',
+  'cherry-pick': ' Es läuft ein Cherry-Pick; der Mensch setzt ihn im Merge-&-Review-Panel fort oder bricht ihn dort ab.'
+}
+const EN_DURING: Record<OperationKind, string> = {
+  merge: ' A merge is in progress; the human finishes or aborts it in the Merge & Review panel.',
+  rebase: ' A rebase is in progress; the human continues or aborts it in the Merge & Review panel.',
+  'cherry-pick': ' A cherry-pick is in progress; the human continues or aborts it in the Merge & Review panel.'
+}
+/** The commit Git is applying, for `git show` in an agent prompt. */
+const STEP_HEAD: Record<'rebase' | 'cherry-pick', string> = { rebase: 'REBASE_HEAD', 'cherry-pick': 'CHERRY_PICK_HEAD' }
 
 export const m = messages({
   de: {
@@ -32,6 +50,26 @@ export const m = messages({
     stillHasMarkers: (rel: string) => `"${rel}" enthält noch Konfliktmarker.`,
     invalidPath: (path: string) => `Ungültiger Pfad: "${path}"`,
 
+    // ---- repo.ts: rebase and cherry-pick (E9–E12)
+    opName: (kind: OperationKind) => DE_OP[kind],
+    operationRunning: (kind: OperationKind) => `Es läuft schon ein ${DE_OP[kind]}. Erst fortsetzen oder abbrechen.`,
+    operationRunningUseAbort: (kind: OperationKind) => `Es läuft ein ${DE_OP[kind]}. Dafür „Abbrechen“ nutzen.`,
+    useContinue: (kind: OperationKind) => `Es läuft ein ${DE_OP[kind]}, kein Merge. Mit „Weiter“ geht es zum nächsten Commit.`,
+    mergeUseFinish: 'Es läuft ein Merge. Dafür „Merge abschließen“ nutzen.',
+    noStepOperation: 'Es läuft kein Rebase und kein Cherry-Pick.',
+    operationNotPossible: (kind: OperationKind, detail: string) => `${DE_OP[kind]} nicht möglich: ${detail}`,
+    opStopped: (kind: OperationKind, detail: string) => `${DE_OP[kind]} angehalten: ${detail}`,
+    opEmpty: (kind: OperationKind) =>
+      `Der Commit ist nach der Auflösung leer: Seine Änderung ist schon da. „Commit überspringen“ wählen oder den ${DE_OP[kind]} abbrechen.`,
+    rebased: (onto: string) => `Rebase auf ${onto} abgeschlossen.`,
+    rebaseUpToDate: (onto: string) => `Schon aktuell: Der Branch baut bereits auf ${onto} auf.`,
+    picked: (n: number) => `${n} Commit(s) per Cherry-Pick übernommen.`,
+    pickFinished: 'Cherry-Pick abgeschlossen.',
+    commitSkipped: 'Commit übersprungen.',
+    pickNothing: 'Keine Commits ausgewählt.',
+    pickMergeCommit: (short: string) => `${short} ist ein Merge-Commit. Cherry-Pick übernimmt nur einfache Commits.`,
+    pickAlreadyContained: (short: string) => `${short} ist schon im aktuellen Branch enthalten.`,
+
     // ---- conflicts.ts
     noBaseSection: 'Diese Datei enthält keinen Basis-Abschnitt (diff3).',
     conflictGone: (n: number) => `Konflikt ${n} gibt es in dieser Datei nicht (mehr).`,
@@ -52,19 +90,19 @@ export const m = messages({
     probeRed: (exit: number | string) => `Tests rot (Exit ${exit}).`,
 
     // ---- gitGuard.ts: why an agent's Git call is refused (the agent reads it)
-    guardBlocked: (why: string, merging: boolean) =>
-      `Merge & Review hat diesen Befehl blockiert: ${why}.${
-        merging ? ' Es läuft ein Merge; der Mensch schließt ihn im Merge-&-Review-Panel ab oder bricht ihn dort ab.' : ''
-      }`,
-    guardResetHard: 'git reset --hard verwirft den Merge und alle Auflösungen',
-    guardResetMerge: 'git reset --merge bricht den Merge ab',
+    guardBlocked: (why: string, during: OperationKind | null) =>
+      `Merge & Review hat diesen Befehl blockiert: ${why}.${during ? DE_DURING[during] : ''}`,
+    guardResetHard: (kind: OperationKind) => `git reset --hard verwirft den ${DE_OP[kind]} und alle Auflösungen`,
+    guardResetMerge: (kind: OperationKind) => `git reset --merge bricht den ${DE_OP[kind]} ab`,
     guardMergeAbort: 'git merge --abort bricht den Merge ab',
     guardCheckoutForce: 'git checkout --force verwirft Auflösungen',
     guardWholeTree: 'Zurücksetzen des ganzen Arbeitsbaums verwirft Auflösungen',
-    guardSwitchBranch: 'Branch-Wechsel mitten im Merge',
+    guardSwitchBranch: (kind: OperationKind) => `Branch-Wechsel mitten im ${DE_OP[kind]}`,
     guardCleanForce: 'git clean -f löscht Dateien',
-    guardStash: 'git stash während eines Merges verliert den Merge-Zustand',
-    guardRebase: 'Rebase mitten im Merge',
+    guardStash: (kind: OperationKind) => `git stash während eines ${DE_OP[kind]}s verliert den ${DE_OP[kind]}-Zustand`,
+    guardRebase: (kind: OperationKind) => `Rebase mitten im ${DE_OP[kind]}`,
+    guardCherryPick: (kind: OperationKind) => `Cherry-Pick mitten im ${DE_OP[kind]}`,
+    guardOpControl: (command: string, kind: OperationKind) => `${command} greift in den laufenden ${DE_OP[kind]} ein`,
     guardForcePush: 'Force-Push überschreibt fremde Arbeit',
 
     // ---- prompts.ts: texts for agents
@@ -83,6 +121,26 @@ export const m = messages({
       '- Schreibe am Ende eine kurze Zusammenfassung pro Datei: was du wie entschieden hast.',
       'Der Mensch prüft deine Auflösung in Merge & Review und schließt den Merge selbst ab.'
     ].join('\n'),
+    resolveStep: (current: number, total: number, commit: string) => ` (Commit ${current} von ${total}: ${commit})`,
+    resolveIntroRebase: (onto: string, branch: string, step: string) =>
+      `In diesem Workspace läuft ein Rebase von \`${branch}\` auf \`${onto}\`${step}, mit Konflikten in:`,
+    resolveIntroPick: (commit: string, target: string, step: string) =>
+      `In diesem Workspace läuft ein Cherry-Pick von \`${commit}\` auf \`${target}\`${step}, mit Konflikten in:`,
+    resolveTaskStep: (kind: 'rebase' | 'cherry-pick') =>
+      [
+        'Aufgabe: Löse jeden Konflikt so auf, dass beide Absichten erhalten bleiben. Lies dazu den Commit, der gerade',
+        `angewendet wird (\`git show ${STEP_HEAD[kind]}\`), und \`git diff\`. Prüfe danach mit den Tests des Projekts.`,
+        ...(kind === 'rebase'
+          ? ['Achtung: Beim Rebase steht „ours“/HEAD für die Basis, auf die rebased wird, und „theirs“ für den gerade angewendeten Commit.']
+          : []),
+        '',
+        'Regeln:',
+        '- Entferne alle Konfliktmarker; markiere gelöste Dateien mit `git add <datei>`.',
+        `- Committe NICHT, setze den ${DE_OP[kind]} NICHT fort, überspringe und brich nichts ab (kein --continue/--skip/--abort),`,
+        '  kein reset/stash/checkout des ganzen Baums.',
+        '- Schreibe am Ende eine kurze Zusammenfassung pro Datei: was du wie entschieden hast.',
+        `Der Mensch prüft deine Auflösung in Merge & Review und setzt den ${DE_OP[kind]} selbst fort.`
+      ].join('\n'),
     watchLines: (base: string) =>
       [
         `Merge-Wächter (Merge & Review): Prüfe, ob sich \`${base}\` noch sauber in diesen Branch mergen lässt.`,
@@ -109,6 +167,11 @@ export const m = messages({
       `${tag} In diesem Workspace läuft ein Merge von \`${source}\`. ${open}` +
       'Merge nicht abbrechen, nicht committen, kein reset/stash/checkout des ganzen Baums; ' +
       'gelöste Dateien nur mit `git add` markieren. Der Mensch schließt den Merge in Merge & Review ab.',
+    hintStep: (tag: string, kind: 'rebase' | 'cherry-pick', source: string, open: string) =>
+      `${tag} In diesem Workspace läuft ein ${DE_OP[kind]} ${kind === 'rebase' ? 'auf' : 'von'} \`${source}\`. ${open}` +
+      `${DE_OP[kind]} nicht fortsetzen, nicht überspringen, nicht abbrechen (kein --continue/--skip/--abort), nicht committen, ` +
+      'kein reset/stash/checkout des ganzen Baums; gelöste Dateien nur mit `git add` markieren. ' +
+      `Der Mensch setzt den ${DE_OP[kind]} in Merge & Review fort.`,
 
     // ---- readiness.ts
     readyFastForward: '✓ Fast-forward',
@@ -179,6 +242,26 @@ export const m = messages({
     stillHasMarkers: (rel: string) => `"${rel}" still contains conflict markers.`,
     invalidPath: (path: string) => `Invalid path: "${path}"`,
 
+    // ---- repo.ts: rebase and cherry-pick
+    opName: (kind: OperationKind) => EN_OP[kind],
+    operationRunning: (kind: OperationKind) => `A ${EN_OP[kind]} is already in progress. Continue or abort it first.`,
+    operationRunningUseAbort: (kind: OperationKind) => `A ${EN_OP[kind]} is in progress. Use “Abort” for that.`,
+    useContinue: (kind: OperationKind) => `A ${EN_OP[kind]} is in progress, not a merge. “Continue” moves on to the next commit.`,
+    mergeUseFinish: 'A merge is in progress. Use “Finish merge” for that.',
+    noStepOperation: 'No rebase or cherry-pick is in progress.',
+    operationNotPossible: (kind: OperationKind, detail: string) => `${EN_OP_TITLE[kind]} not possible: ${detail}`,
+    opStopped: (kind: OperationKind, detail: string) => `${EN_OP_TITLE[kind]} stopped: ${detail}`,
+    opEmpty: (kind: OperationKind) =>
+      `The commit is empty after the resolution: its change is already there. Choose “Skip commit” or abort the ${EN_OP[kind]}.`,
+    rebased: (onto: string) => `Rebased onto ${onto}.`,
+    rebaseUpToDate: (onto: string) => `Already up to date: the branch is already based on ${onto}.`,
+    picked: (n: number) => `${plural(n, 'commit', 'commits')} taken over by cherry-pick.`,
+    pickFinished: 'Cherry-pick finished.',
+    commitSkipped: 'Commit skipped.',
+    pickNothing: 'No commits selected.',
+    pickMergeCommit: (short: string) => `${short} is a merge commit. Cherry-pick only takes plain commits.`,
+    pickAlreadyContained: (short: string) => `${short} is already in the current branch.`,
+
     // ---- conflicts.ts
     noBaseSection: 'This file has no base section (diff3).',
     conflictGone: (n: number) => `Conflict ${n} no longer exists in this file.`,
@@ -199,19 +282,19 @@ export const m = messages({
     probeRed: (exit: number | string) => `Tests failed (exit ${exit}).`,
 
     // ---- gitGuard.ts
-    guardBlocked: (why: string, merging: boolean) =>
-      `Merge & Review blocked this command: ${why}.${
-        merging ? ' A merge is in progress; the human finishes or aborts it in the Merge & Review panel.' : ''
-      }`,
-    guardResetHard: 'git reset --hard discards the merge and every resolution',
-    guardResetMerge: 'git reset --merge aborts the merge',
+    guardBlocked: (why: string, during: OperationKind | null) =>
+      `Merge & Review blocked this command: ${why}.${during ? EN_DURING[during] : ''}`,
+    guardResetHard: (kind: OperationKind) => `git reset --hard discards the ${EN_OP[kind]} and every resolution`,
+    guardResetMerge: (kind: OperationKind) => `git reset --merge aborts the ${EN_OP[kind]}`,
     guardMergeAbort: 'git merge --abort aborts the merge',
     guardCheckoutForce: 'git checkout --force discards resolutions',
     guardWholeTree: 'Resetting the whole working tree discards resolutions',
-    guardSwitchBranch: 'Switching branches in the middle of a merge',
+    guardSwitchBranch: (kind: OperationKind) => `Switching branches in the middle of a ${EN_OP[kind]}`,
     guardCleanForce: 'git clean -f deletes files',
-    guardStash: 'git stash during a merge loses the merge state',
-    guardRebase: 'Rebasing in the middle of a merge',
+    guardStash: (kind: OperationKind) => `git stash during a ${EN_OP[kind]} loses the ${EN_OP[kind]} state`,
+    guardRebase: (kind: OperationKind) => `Rebasing in the middle of a ${EN_OP[kind]}`,
+    guardCherryPick: (kind: OperationKind) => `Cherry-picking in the middle of a ${EN_OP[kind]}`,
+    guardOpControl: (command: string, kind: OperationKind) => `${command} interferes with the ${EN_OP[kind]} in progress`,
     guardForcePush: "Force-pushing overwrites other people's work",
 
     // ---- prompts.ts
@@ -230,6 +313,26 @@ export const m = messages({
       '- At the end, write a short summary per file: what you decided and how.',
       'The human reviews your resolution in Merge & Review and finishes the merge themselves.'
     ].join('\n'),
+    resolveStep: (current: number, total: number, commit: string) => ` (commit ${current} of ${total}: ${commit})`,
+    resolveIntroRebase: (onto: string, branch: string, step: string) =>
+      `A rebase of \`${branch}\` onto \`${onto}\`${step} is in progress in this workspace, with conflicts in:`,
+    resolveIntroPick: (commit: string, target: string, step: string) =>
+      `A cherry-pick of \`${commit}\` onto \`${target}\`${step} is in progress in this workspace, with conflicts in:`,
+    resolveTaskStep: (kind: 'rebase' | 'cherry-pick') =>
+      [
+        'Task: Resolve every conflict so that both intentions are kept. Read the commit being',
+        `applied (\`git show ${STEP_HEAD[kind]}\`) and \`git diff\`. Then check with the project's tests.`,
+        ...(kind === 'rebase'
+          ? ['Note: during a rebase, "ours"/HEAD is the base being rebased onto and "theirs" the commit being applied.']
+          : []),
+        '',
+        'Rules:',
+        '- Remove all conflict markers; mark resolved files with `git add <file>`.',
+        `- Do NOT commit, do NOT continue, skip or abort the ${EN_OP[kind]} (no --continue/--skip/--abort),`,
+        '  no reset/stash/checkout of the whole tree.',
+        '- At the end, write a short summary per file: what you decided and how.',
+        `The human reviews your resolution in Merge & Review and continues the ${EN_OP[kind]} themselves.`
+      ].join('\n'),
     watchLines: (base: string) => [
       `Merge watch (Merge & Review): Check whether \`${base}\` still merges cleanly into this branch.`,
       '',
@@ -255,6 +358,11 @@ export const m = messages({
       `${tag} A merge of \`${source}\` is in progress in this workspace. ${open}` +
       'Do not abort the merge, do not commit, no reset/stash/checkout of the whole tree; ' +
       'mark resolved files only with `git add`. The human finishes the merge in Merge & Review.',
+    hintStep: (tag: string, kind: 'rebase' | 'cherry-pick', source: string, open: string) =>
+      `${tag} A ${EN_OP[kind]} ${kind === 'rebase' ? 'onto' : 'of'} \`${source}\` is in progress in this workspace. ${open}` +
+      `Do not continue, skip or abort the ${EN_OP[kind]} (no --continue/--skip/--abort), do not commit, ` +
+      'no reset/stash/checkout of the whole tree; mark resolved files only with `git add`. ' +
+      `The human continues the ${EN_OP[kind]} in Merge & Review.`,
 
     // ---- readiness.ts
     readyFastForward: '✓ Fast-forward',

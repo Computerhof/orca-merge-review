@@ -334,3 +334,119 @@ test('once the panel reports English, the worker answers in English', async () =
     await worker.deactivate()
   }
 })
+
+// ---------------------------------------------------------------- rebase and cherry-pick (E9–E12)
+
+const gitIn = (dir: string, ...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim()
+
+test('rebase.run stops on a conflict, the state and guard know it, op.continue finishes, undo puts it back', async () => {
+  const dir = divergentRepo()
+  gitIn(dir, 'checkout', '-q', 'feature')
+  const before = gitIn(dir, 'rev-parse', 'HEAD')
+  const host = mockHost({ results: hostResults(dir) })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    await worker.emit('workspace.changed', { context: { workspaceId: 'ws-main', branch: 'feature', displayName: 'main', terminals: [] } })
+    const out = await worker.request('rebase.run', { source: 'main' })
+    assert.equal(out.status, 'conflicts')
+    assert.deepEqual(out.conflicts, ['a.txt'])
+
+    const st = await worker.request('repo.state', {})
+    assert.equal(st.merge?.kind, 'rebase')
+    assert.equal(st.merge?.source, 'main')
+    assert.equal(st.merge?.branch, 'feature')
+    assert.equal(st.merge?.sides.ours, 'main')
+    assert.match(st.merge?.sides.theirs ?? '', / feature: zwei$/)
+
+    // E12: the agent may not continue the rebase, but may mark files resolved.
+    const deny = await worker.hooks.fire('agent.tool.before', { agent: 'claude', workspaceId: 'ws-main', tool: 'Bash', input: { command: 'git rebase --continue' } })
+    assert.equal(deny.kind, 'deny')
+    assert.match((deny as { reason: string }).reason, /Es läuft ein Rebase/)
+    const pass = await worker.hooks.fire('agent.tool.before', { agent: 'claude', workspaceId: 'ws-main', tool: 'Bash', input: { command: 'git add a.txt' } })
+    assert.equal(pass.kind, 'continue')
+
+    // The status bar names the rebase.
+    await new Promise((r) => setTimeout(r, 700))
+    const texts = host.callsOf('statusBar.update').map((c) => (c as { text?: string }).text)
+    assert.ok(texts.includes('Rebase: 1 Konflikt offen'), `status bar: ${JSON.stringify(texts)}`)
+
+    // The conflict agent learns it is a rebase and that it must not continue it.
+    await worker.request('agent.resolveConflicts', {})
+    const p = host.callsOf('agent.launch')[0] as { prompt: string }
+    assert.match(p.prompt, /läuft ein Rebase von `feature` auf `main`/)
+    assert.match(p.prompt, /setze den Rebase NICHT fort/)
+
+    await assert.rejects(worker.request('op.continue', {}), /ungelöste/)
+    await worker.request('conflict.resolveHunk', { path: 'a.txt', index: 0, choice: 'theirs' })
+    await worker.request('conflict.markResolved', { path: 'a.txt' })
+    const done = await worker.request('op.continue', {})
+    assert.equal(done.status, 'rebased')
+
+    const after = await worker.request('repo.state', {})
+    assert.equal(after.merge, null)
+    assert.equal(after.branch, 'feature')
+    assert.equal(after.lastMerge?.source, 'main')
+    assert.equal(after.lastMerge?.before, before)
+    await worker.request('merge.undo', {})
+    assert.equal(gitIn(dir, 'rev-parse', 'HEAD'), before)
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('pick.run parks uncommitted work, op.skip ends the pick and brings it back', async () => {
+  const dir = divergentRepo()
+  writeFileSync(join(dir, 'keep.txt'), 'bleibt\n')
+  gitIn(dir, 'add', 'keep.txt')
+  gitIn(dir, 'commit', '-q', '-m', 'keep')
+  writeFileSync(join(dir, 'keep.txt'), 'meine Arbeit\n')
+  const before = gitIn(dir, 'rev-parse', 'HEAD')
+  const host = mockHost({ results: hostResults(dir) })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    const out = await worker.request('pick.run', { commits: [gitIn(dir, 'rev-parse', 'feature')], park: true })
+    assert.equal(out.status, 'conflicts')
+    assert.match(out.message, /kommen nach dem Abschluss oder Abbruch zurück/)
+    assert.equal(readFileSync(join(dir, 'keep.txt'), 'utf8'), 'bleibt\n', 'parked while picking')
+    const st = await worker.request('repo.state', {})
+    assert.equal(st.merge?.kind, 'cherry-pick')
+    assert.deepEqual([st.merge?.step?.current, st.merge?.step?.total], [1, 1])
+    assert.equal(st.merge?.sides.ours, 'main')
+    await assert.rejects(worker.request('merge.commit', {}), /„Weiter“/)
+
+    const skipped = await worker.request('op.skip', {})
+    assert.equal(skipped.status, 'picked')
+    assert.match(skipped.message, /^Commit übersprungen\. Cherry-Pick abgeschlossen\./)
+    assert.equal(readFileSync(join(dir, 'keep.txt'), 'utf8'), 'meine Arbeit\n', 'back after the pick ended')
+    const after = await worker.request('repo.state', {})
+    assert.equal(after.merge, null)
+    assert.equal(after.parked, null)
+    assert.equal(after.lastMerge, null, 'nothing was picked, nothing to undo')
+    assert.equal(gitIn(dir, 'rev-parse', 'HEAD'), before)
+  } finally {
+    await worker.deactivate()
+  }
+})
+
+test('merge.abort aborts a rebase; in English the outcome reads in English', async () => {
+  const dir = divergentRepo()
+  gitIn(dir, 'checkout', '-q', 'feature')
+  const before = gitIn(dir, 'rev-parse', 'HEAD')
+  const host = mockHost({ results: hostResults(dir) })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    await worker.request('ui.locale', { locale: 'en-US' })
+    const out = await worker.request('rebase.run', { source: 'main' })
+    assert.equal(out.message, '1 file with conflicts. Resolve them in the “Conflicts” section.')
+    await assert.rejects(worker.request('rebase.run', { source: 'main' }), /A rebase is already in progress/)
+    await worker.request('merge.abort', {})
+    assert.equal(gitIn(dir, 'rev-parse', 'HEAD'), before)
+    assert.equal((await worker.request('repo.state', {})).branch, 'feature')
+    const clean = await worker.request('rebase.run', { source: 'feature' })
+    assert.equal(clean.status, 'up-to-date')
+    assert.equal(clean.message, 'Already up to date: the branch is already based on feature.')
+  } finally {
+    await worker.request('ui.locale', { locale: 'de' })
+    await worker.deactivate()
+  }
+})

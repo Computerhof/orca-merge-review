@@ -14,7 +14,7 @@ src/
                         Abbruch, Abschluss, Undo, Konflikte (über GitRunner + FileAccess)
     conflicts.ts        Konfliktmarker lesen/auflösen (merge, diff3), Zeilenenden bleiben erhalten
     diffview.ts         Unified Patch → Side-by-Side-Zeilen
-    gitGuard.ts         Agent-Toolaufruf → „zerstört das einen laufenden Merge?“ (synchron)
+    gitGuard.ts         Agent-Toolaufruf → „zerstört das einen laufenden Merge/Rebase/Cherry-Pick?“ (synchron)
     prompts.ts          Texte für Agenten (Review-Anmerkung, Konfliktauftrag, Merge-Wächter, Merge-Hinweis)
     reviewExport.ts     Review als Markdown (Vergleich, Commits, Dateien, Notizen)
     readiness.ts        K10: Wie bereit ist ein Workspace? (Sortierung, Beschriftung)
@@ -26,11 +26,12 @@ src/
   git/                  ── austauschbare Anbindung ──
     runner.ts           GitRunner-Schnittstelle + LocalGitRunner (execFile, keine Shell)
     files.ts            FileAccess auf das lokale Dateisystem (UTF-8, sonst verlustfrei latin1)
-    mergeMarkers.ts     „Läuft hier ein Merge?“ synchron aus MERGE_HEAD/SQUASH_MSG, für Hooks
+    mergeMarkers.ts     „Läuft hier ein Merge, Rebase oder Cherry-Pick?“ synchron aus den Markerdateien, für Hooks
   worker.ts             Nur Verdrahtung: Handler, Events, Hooks, Befehle
   worker/
     workspaces.ts       Orca-Workspace → Repo; Quellen (Geschwister-Workspaces, Branches, Remotes)
     handlers.ts         Request-Handler (dünn, UserError → Meldung im Panel)
+    operations.ts       Merge/Rebase/Cherry-Pick: parken → ausführen → offen oder fertig (Undo, Zurückholen, Tests)
     monitor.ts          Merge-Zustand pro Workspace (Cache für Hook und Status-Leiste)
     reviewTab.ts        Hilfsdatei schreiben + editor.open
     agents.ts           Anmerkung zustellen (laufend → fortsetzen → neu), Warteschlange, Agent ohne Start-Prompt melden

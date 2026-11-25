@@ -1,6 +1,6 @@
 // Small closed loops around a running merge (docs/UX-PLAN.md, K13–K15):
 //   K13 a conflicted file saved without markers is marked resolved,
-//   K14 prompts to an agent in a merging workspace get a one-line merge hint,
+//   K14 prompts to an agent in a merging (rebasing, cherry-picking) workspace get a one-line hint,
 //   K15 "Zum Agenten" focuses the agent of a source workspace, else opens the workspace.
 import type { OrcaWorkerApi, PluginHooks } from 'orca/worker'
 import { countConflicts } from '../core/conflicts.ts'
@@ -65,7 +65,7 @@ export async function promptHint(deps: CircleDeps, e: PromptEvent): Promise<stri
     const ws = await deps.workspaces.resolve(row.id)
     const merge = await ws.repo.mergeSummary()
     if (!merge) return null
-    return mergeHintPrompt({ source: merge.source, open: merge.conflicts.length - merge.markerFree.length })
+    return mergeHintPrompt({ source: merge.source, open: merge.conflicts.length - merge.markerFree.length, kind: merge.kind })
   }
   return null
 }

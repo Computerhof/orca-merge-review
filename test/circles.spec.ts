@@ -18,7 +18,8 @@ const comparison: Comparison = {
     { status: 'R', path: 'neu.ts', from: 'alt.ts', added: 0, deleted: 0 },
     { status: 'A', path: 'logo.png', added: null, deleted: null }
   ],
-  preview: { clean: false, conflicts: ['src/a|b.ts'], upToDate: false, fastForward: false }
+  preview: { clean: false, conflicts: ['src/a|b.ts'], upToDate: false, fastForward: false },
+  rebase: null
 }
 
 test('review markdown: summary, notes per file, commits, escaped file table', () => {

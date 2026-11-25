@@ -6,6 +6,9 @@ import { UserError } from '../core/repo.ts'
 import type { RepoState, ReviewView } from '../types.ts'
 import { deliverToAgent, launchAgent, type PendingSends } from './agents.ts'
 import { getLocale, localeOf, setLocale } from '../i18n/index.ts'
+
+/** Orca forwards the guard's refusal to Claude Code except on Windows (stablyai/orca#49004). */
+const AGENT_GUARD: 'blocks' | 'observes' = process.platform === 'win32' ? 'observes' : 'blocks'
 import type { Memory } from './memory.ts'
 import { m } from './messages.ts'
 import type { Monitor } from './monitor.ts'
@@ -16,6 +19,7 @@ import type { Jobs } from './jobs.ts'
 import { buildOverview } from './overview.ts'
 import { projectKey, projectTestCommand, suggestTestCommand } from './projectTests.ts'
 import { findWatch, setWatch } from './watch.ts'
+import { pickLabel, restoreParked as restore, runOperation, stepOperation, testAfterMerge as testsAfter } from './operations.ts'
 import type { Resolved, Workspaces } from './workspaces.ts'
 
 export interface Deps {
@@ -50,35 +54,9 @@ function guarded<I extends { workspaceId?: string }, O>(deps: Deps, fn: (input: 
 
 export function registerHandlers(deps: Deps): void {
   const { orca, workspaces, memory, monitor, settings, pending, jobs } = deps
-
-  /**
-   * Brings changes parked for a merge back. `careful`: not when the merge changed the same files
-   * (then they stay parked and the panel offers to restore them).
-   */
-  const restoreParked = async (ws: Resolved, careful: boolean): Promise<string> => {
-    const p = await memory.parked(ws.info.id)
-    if (!p) return ''
-    const r = await ws.repo.unpark(p.sha, p.files, careful ? p.before : undefined)
-    if (r === 'restored' || r === 'missing') await memory.setParked(ws.info.id, null)
-    orca.log(`parked changes: ${r}`)
-    return r === 'restored'
-      ? m.parkedBack
-      : r === 'overlap'
-        ? m.parkedOverlap
-        : r === 'conflict'
-          ? m.parkedConflict
-          : ''
-  }
-  /** K11: after a successful merge, the tests run by themselves when a command is set. */
-  const testAfterMerge = async (ws: Resolved, source: string | null) => {
-    const command = await projectTestCommand(memory, ws)
-    if (!command) return
-    try {
-      jobs.runTests(ws, source, command)
-    } catch (error) {
-      orca.log(`tests after merge: ${(error as Error).message}`)
-    }
-  }
+  const restoreParked = (ws: Resolved, careful: boolean) => restore(deps, ws, careful)
+  const testAfterMerge = (ws: Resolved, source: string | null) => testsAfter(deps, ws, source)
+  const showBase = () => settings.current.showBase
   const touches = true
 
   orca.panels.handle(
@@ -106,7 +84,8 @@ export function registerHandlers(deps: Deps): void {
           testCommand: null,
           suggestedTest: null,
           projectName: null,
-          stalledAgent: null
+          stalledAgent: null,
+          agentGuard: AGENT_GUARD
         }
       }
       // One ref listing serves the state, the base guess and the source list.
@@ -138,7 +117,8 @@ export function registerHandlers(deps: Deps): void {
         testCommand: await projectTestCommand(memory, ws),
         suggestedTest: await suggestTestCommand(ws),
         projectName: ws.row.project ?? null,
-        stalledAgent: pending.stalledOf(ws.info.id)
+        stalledAgent: pending.stalledOf(ws.info.id),
+        agentGuard: AGENT_GUARD
       }
     })
   )
@@ -168,46 +148,79 @@ export function registerHandlers(deps: Deps): void {
       deps,
       async ({ workspaceId, source, mode, message, park }) => {
         const ws = await workspaces.resolve(workspaceId)
-        const before = await ws.repo.head()
         await ws.repo.verify(source)
         const { ahead: commits } = await ws.repo.aheadBehind('HEAD', source)
-        if (park && (await ws.repo.dirtyFiles(true)).length) {
-          if (await ws.repo.mergeSummary()) throw new UserError(core.mergeAlreadyRunning)
-          if (await memory.parked(ws.info.id)) {
-            throw new UserError(m.parkedStillThere)
-          }
-          const parked = await ws.repo.park(m.stashMessage(source))
-          await memory.setParked(ws.info.id, { ...parked, source, before, at: Date.now() })
-        }
-        let outcome
-        try {
-          outcome = await ws.repo.merge(source, mode, message, { showBase: settings.current.showBase })
-        } catch (error) {
-          await restoreParked(ws, false).catch((e) => orca.log(`restore after failed merge: ${(e as Error).message}`))
-          throw error
-        }
-        if (outcome.status === 'conflicts') {
-          await memory.setPending(ws.info.id, { source, before, commits })
-          if (await memory.parked(ws.info.id)) {
-            outcome = { ...outcome, message: m.parkedReturnLater(outcome.message) }
-          }
-          await openReviewTab(orca, ws, { view: 'overview', source }).catch((e) => orca.log(String(e)))
-        } else {
-          if (outcome.status !== 'up-to-date') {
-            await memory.setLastMerge(ws.info.id, { source, before, after: await ws.repo.head(), at: Date.now(), commits })
-          }
-          outcome = { ...outcome, message: outcome.message + (await restoreParked(ws, true)) }
-          if (outcome.status !== 'up-to-date') {
-            void orca.host.call('notifications.show', { title: 'Merge & Review', body: outcome.message }).catch(() => {})
-            await testAfterMerge(ws, source)
-          }
-        }
-        return outcome
+        return runOperation(
+          deps,
+          ws,
+          { source, commits, park, stashMessage: m.stashMessage(source), reviewSource: source },
+          () => ws.repo.merge(source, mode, message, { showBase: showBase() })
+        )
       },
       touches
     )
   )
 
+  // E9: rebase the current branch onto `source`; stops on conflicts like a merge.
+  orca.panels.handle(
+    'rebase.run',
+    guarded(
+      deps,
+      async ({ workspaceId, source, park }) => {
+        const ws = await workspaces.resolve(workspaceId)
+        await ws.repo.verify(source)
+        // The branch's own commits are what the rebase rewrites (and what undo puts back).
+        const { behind: commits } = await ws.repo.aheadBehind('HEAD', source)
+        return runOperation(
+          deps,
+          ws,
+          { source, commits, park, stashMessage: m.stashBeforeRebase(source), reviewSource: source },
+          () => ws.repo.rebase(source, { showBase: showBase() })
+        )
+      },
+      touches
+    )
+  )
+
+  // E11: apply chosen commits with cherry-pick -x, oldest first.
+  orca.panels.handle(
+    'pick.run',
+    guarded(
+      deps,
+      async ({ workspaceId, commits, park }) => {
+        const ws = await workspaces.resolve(workspaceId)
+        const list = Array.isArray(commits) ? commits.filter((c): c is string => typeof c === 'string') : []
+        if (!list.length) throw new UserError(core.pickNothing)
+        const ids: string[] = []
+        for (const c of list) ids.push(await ws.repo.verify(c))
+        const label = pickLabel(ids)
+        return runOperation(
+          deps,
+          ws,
+          { source: label, commits: new Set(ids).size, park, stashMessage: m.stashBeforePick(label) },
+          () => ws.repo.cherryPick(ids, { showBase: showBase() })
+        )
+      },
+      touches
+    )
+  )
+
+  // Rebase / cherry-pick: next commit, or leave the current one out.
+  orca.panels.handle(
+    'op.continue',
+    guarded(
+      deps,
+      async ({ workspaceId }) => stepOperation(deps, await workspaces.resolve(workspaceId), 'continue', showBase()),
+      touches
+    )
+  )
+
+  orca.panels.handle(
+    'op.skip',
+    guarded(deps, async ({ workspaceId }) => stepOperation(deps, await workspaces.resolve(workspaceId), 'skip', showBase()), touches)
+  )
+
+  // Aborts any of them (merge, rebase, cherry-pick); parked changes come back.
   orca.panels.handle(
     'merge.abort',
     guarded(
@@ -340,7 +353,9 @@ export function registerHandlers(deps: Deps): void {
       if (!merge) throw new UserError(core.noMergeRunning)
       const open = merge.conflicts.filter((f) => !merge.markerFree.includes(f))
       if (!open.length) throw new UserError(m.allResolvedAlready)
-      const prompt = resolveConflictsPrompt({ target: branch ?? ws.info.name, source: merge.source, files: open })
+      // During a rebase HEAD is detached: the branch being rebased is the target.
+      const target = branch ?? merge.branch ?? ws.info.name
+      const prompt = resolveConflictsPrompt({ target, source: merge.source, files: open, op: merge })
       const terminalId = await launchAgent(orca, pending, ws.info.id, settings.current.agent, prompt)
       return { how: 'launched' as const, terminalId }
     })
@@ -354,7 +369,8 @@ export function registerHandlers(deps: Deps): void {
         const ws = await workspaces.resolve(workspaceId)
         const p = await memory.parked(ws.info.id)
         if (!p) throw new UserError(m.noParked)
-        if (await ws.repo.mergeSummary()) throw new UserError(m.finishMergeFirst)
+        const kind = await ws.repo.operation()
+        if (kind) throw new UserError(kind === 'merge' ? m.finishMergeFirst : core.operationRunning(kind))
         const result = await ws.repo.unpark(p.sha, p.files)
         if (result !== 'conflict') await memory.setParked(ws.info.id, null)
         return { result: result as 'restored' | 'missing' | 'conflict' }

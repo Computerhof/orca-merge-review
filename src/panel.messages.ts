@@ -48,6 +48,8 @@ export const m = messages({
     // --- header
     detachedHead: 'HEAD (losgelöst)',
     mergeRunning: 'Merge läuft',
+    rebaseRunning: 'Rebase läuft',
+    pickRunning: 'Cherry-Pick läuft',
     changedCount: (n: number) => `${n} geändert`,
     clean: 'sauber',
     reload: 'Neu laden',
@@ -185,6 +187,39 @@ export const m = messages({
     parkingAndMerging: 'Parke Änderungen und merge …',
     merging: 'Merge läuft …',
 
+    // --- details: rebase (E9/E10)
+    rebaseOnto: (source: string) => `Auf ${source} aktualisieren (Rebase)`,
+    parkAndRebase: (source: string) => `Änderungen parken und auf ${source} aktualisieren (Rebase)`,
+    rebaseNothing: (source: string) => `Nichts zu aktualisieren: ${source} hat keine Commits, die hier fehlen.`,
+    rebaseOnBase: (base: string) => `${base} ist der Basis-Branch: hier mergen statt rebasen (ein Rebase würde ${base} neu schreiben).`,
+    guardObservesTitle: 'Agenten-Schutz unter Windows nur protokollierend',
+    guardObservesBody:
+      'Orca gibt die Ablehnung unter Windows derzeit nicht an Claude Code weiter (Orca-Issue #49004): Befehle wie „git merge --abort“ würden trotzdem laufen. Agenten in diesem Workspace bis zum Abschluss besser nicht arbeiten lassen.',
+    confirmRebaseTitle: (branch: string | null, source: string) => `${branch} auf ${source} aktualisieren?`,
+    confirmRebaseSummary: (commits: number, branch: string | null, source: string, agentWorking: boolean) =>
+      (commits
+        ? `${commits} Commit(s) von ${branch} werden neu geschrieben (neue Hashes) und auf ${source} gesetzt.`
+        : `${branch} hat keine eigenen Commits und rückt nur auf ${source} vor.`) +
+      (agentWorking ? ' Achtung: der Agent der Quelle arbeitet noch.' : ''),
+    confirmRebasePushed: (pushed: number, upstream: string | null) =>
+      `${pushed} davon schon gepusht${upstream ? ` (auf ${upstream})` : ''}: danach ist ein Force-Push nötig; Merge & Review pusht nie.`,
+    confirmParkNoteRebase: (n: number) => `Vorher werden ${n} geänderte Datei(en) geparkt (git stash) und nach dem Rebase zurückgeholt.`,
+    yesRebase: (park: boolean, pushed: boolean) => `Ja, ${pushed ? 'trotzdem ' : ''}${park ? 'parken und ' : ''}aktualisieren`,
+    rebasing: 'Rebase läuft …',
+    parkingAndRebasing: 'Parke Änderungen und rebase …',
+
+    // --- details: cherry-pick (E11)
+    pickCommits: (n: number) => `${n} Commit(s) übernehmen (Cherry-Pick)`,
+    parkAndPick: (n: number) => `Änderungen parken und ${n} Commit(s) übernehmen (Cherry-Pick)`,
+    confirmPickTitle: (n: number, branch: string | null) => `${n} Commit(s) auf ${branch} übernehmen?`,
+    confirmPickBody: (commits: string, branch: string | null, agentWorking: boolean) =>
+      `${commits} werden in Historien-Reihenfolge auf ${branch} angewendet, mit Herkunftsvermerk (-x).` +
+      (agentWorking ? ' Achtung: der Agent der Quelle arbeitet noch.' : ''),
+    confirmParkNotePick: (n: number) => `Vorher werden ${n} geänderte Datei(en) geparkt (git stash) und danach zurückgeholt.`,
+    yesPick: (park: boolean): string => (park ? 'Ja, parken und übernehmen' : 'Ja, übernehmen'),
+    picking: 'Cherry-Pick läuft …',
+    parkingAndPicking: 'Parke Änderungen und übernehme …',
+
     // --- tests
     thisProject: 'dieses Projekt',
     testsTitle: (project: string, command: string) => `Tests für ${project}: ${command}`,
@@ -229,6 +264,32 @@ export const m = messages({
     abortMerge: 'Merge abbrechen',
     aborting: 'Breche ab …',
     mergeAborted: 'Merge abgebrochen.',
+
+    // --- resolve: rebase and cherry-pick (E9, E11)
+    rebaseInProgress: (branch: string | null, onto: string, step: string) =>
+      branch ? `Rebase von ${branch} auf ${onto} läuft${step}` : `Rebase auf ${onto} läuft${step}`,
+    pickInProgress: (step: string) => `Cherry-Pick läuft${step}`,
+    stepOf: (current: number, total: number, commit: string) => ` · Commit ${current} von ${total}` + (commit ? ` (${commit})` : ''),
+    stepCommit: (commit: string) => ` (${commit})`,
+    stepResolved: 'Alle Konflikte dieses Commits gelöst. „Weiter“ wendet den nächsten Commit an oder schließt ab.',
+    continueOp: 'Weiter',
+    continueBlocked: 'Erst alle Konflikte lösen und als gelöst markieren.',
+    continuing: 'Mache weiter …',
+    nextCommitConflicts: (n: number) => `Der nächste Commit hat Konflikte in ${n} Datei(en). Lösen, dann wieder „Weiter“.`,
+    skipCommit: 'Commit überspringen',
+    skipTitle: (commit: string) => `${commit} überspringen?`,
+    skipBody: 'Dieser Commit wird nicht übernommen; seine Änderungen fehlen danach. Auflösungen in diesem Commit gehen verloren.',
+    thisCommit: 'Diesen Commit',
+    yesSkip: 'Ja, überspringen',
+    skipping: 'Überspringe …',
+    abortRebaseTitle: 'Rebase wirklich abbrechen?',
+    abortRebaseBody: 'Alle Auflösungen gehen verloren; der Branch steht wieder wie vor dem Rebase.',
+    abortRebase: 'Rebase abbrechen',
+    rebaseAborted: 'Rebase abgebrochen.',
+    abortPickTitle: 'Cherry-Pick wirklich abbrechen?',
+    abortPickBody: 'Alle Auflösungen gehen verloren; der Branch steht wieder wie vor dem Cherry-Pick.',
+    abortPick: 'Cherry-Pick abbrechen',
+    pickAborted: 'Cherry-Pick abgebrochen.',
 
     // --- notices from worker events
     autoResolved: (path: string) => `${path} ohne Konfliktmarker gespeichert und als gelöst markiert.`
@@ -278,6 +339,8 @@ export const m = messages({
     // --- header
     detachedHead: 'HEAD (detached)',
     mergeRunning: 'Merge in progress',
+    rebaseRunning: 'Rebase in progress',
+    pickRunning: 'Cherry-pick in progress',
     changedCount: (n: number) => `${n} changed`,
     clean: 'clean',
     reload: 'Reload',
@@ -417,6 +480,41 @@ export const m = messages({
     parkingAndMerging: 'Parking changes and merging …',
     merging: 'Merging …',
 
+    // --- details: rebase (E9/E10)
+    rebaseOnto: (source: string) => `Update onto ${source} (rebase)`,
+    parkAndRebase: (source: string) => `Park changes and update onto ${source} (rebase)`,
+    rebaseNothing: (source: string) => `Nothing to update: ${source} has no commits missing here.`,
+    rebaseOnBase: (base: string) => `${base} is the base branch: merge here instead of rebasing (a rebase would rewrite ${base}).`,
+    guardObservesTitle: 'Agent guard only logs on Windows',
+    guardObservesBody:
+      'On Windows Orca does not pass the refusal on to Claude Code yet (Orca issue #49004): commands like "git merge --abort" would still run. Better keep agents in this workspace idle until this is finished.',
+    confirmRebaseTitle: (branch: string | null, source: string) => `Update ${branch} onto ${source}?`,
+    confirmRebaseSummary: (commits: number, branch: string | null, source: string, agentWorking: boolean) =>
+      (commits
+        ? `${plural(commits, 'commit', 'commits')} of ${branch} will be rewritten (new hashes) and placed on top of ${source}.`
+        : `${branch} has no commits of its own and only moves forward to ${source}.`) +
+      (agentWorking ? ' Note: the source agent is still working.' : ''),
+    confirmRebasePushed: (pushed: number, upstream: string | null) =>
+      `${pushed} of them already pushed${upstream ? ` (to ${upstream})` : ''}: a force push is needed afterwards; Merge & Review never pushes.`,
+    confirmParkNoteRebase: (n: number) =>
+      `First, ${plural(n, 'changed file', 'changed files')} will be parked (git stash) and restored after the rebase.`,
+    yesRebase: (park: boolean, pushed: boolean) => `Yes, ${park ? 'park and ' : ''}update${pushed ? ' anyway' : ''}`,
+    rebasing: 'Rebasing …',
+    parkingAndRebasing: 'Parking changes and rebasing …',
+
+    // --- details: cherry-pick (E11)
+    pickCommits: (n: number) => `Apply ${plural(n, 'commit', 'commits')} (cherry-pick)`,
+    parkAndPick: (n: number) => `Park changes and apply ${plural(n, 'commit', 'commits')} (cherry-pick)`,
+    confirmPickTitle: (n: number, branch: string | null) => `Apply ${plural(n, 'commit', 'commits')} to ${branch}?`,
+    confirmPickBody: (commits: string, branch: string | null, agentWorking: boolean) =>
+      `${commits} will be applied to ${branch} in history order, with a note of their origin (-x).` +
+      (agentWorking ? ' Note: the source agent is still working.' : ''),
+    confirmParkNotePick: (n: number) =>
+      `First, ${plural(n, 'changed file', 'changed files')} will be parked (git stash) and restored afterwards.`,
+    yesPick: (park: boolean) => (park ? 'Yes, park and apply' : 'Yes, apply'),
+    picking: 'Cherry-picking …',
+    parkingAndPicking: 'Parking changes and cherry-picking …',
+
     // --- tests
     thisProject: 'this project',
     testsTitle: (project: string, command: string) => `Tests for ${project}: ${command}`,
@@ -461,6 +559,33 @@ export const m = messages({
     abortMerge: 'Abort merge',
     aborting: 'Aborting …',
     mergeAborted: 'Merge aborted.',
+
+    // --- resolve: rebase and cherry-pick (E9, E11)
+    rebaseInProgress: (branch: string | null, onto: string, step: string) =>
+      branch ? `Rebasing ${branch} onto ${onto}${step}` : `Rebasing onto ${onto}${step}`,
+    pickInProgress: (step: string) => `Cherry-pick in progress${step}`,
+    stepOf: (current: number, total: number, commit: string) => ` · commit ${current} of ${total}` + (commit ? ` (${commit})` : ''),
+    stepCommit: (commit: string) => ` (${commit})`,
+    stepResolved: 'All conflicts of this commit resolved. “Continue” applies the next commit or finishes.',
+    continueOp: 'Continue',
+    continueBlocked: 'Resolve all conflicts and mark them as resolved first.',
+    continuing: 'Continuing …',
+    nextCommitConflicts: (n: number) =>
+      `The next commit has conflicts in ${plural(n, 'file', 'files')}. Resolve them, then “Continue” again.`,
+    skipCommit: 'Skip commit',
+    skipTitle: (commit: string) => `Skip ${commit}?`,
+    skipBody: 'This commit is not applied; its changes will be missing afterwards. Resolutions in this commit are lost.',
+    thisCommit: 'this commit',
+    yesSkip: 'Yes, skip',
+    skipping: 'Skipping …',
+    abortRebaseTitle: 'Really abort the rebase?',
+    abortRebaseBody: 'All resolutions will be lost; the branch goes back to how it was before the rebase.',
+    abortRebase: 'Abort rebase',
+    rebaseAborted: 'Rebase aborted.',
+    abortPickTitle: 'Really abort the cherry-pick?',
+    abortPickBody: 'All resolutions will be lost; the branch goes back to how it was before the cherry-pick.',
+    abortPick: 'Abort cherry-pick',
+    pickAborted: 'Cherry-pick aborted.',
 
     // --- notices from worker events
     autoResolved: (path: string) => `${path} saved without conflict markers and marked as resolved.`

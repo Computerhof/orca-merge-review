@@ -1,17 +1,21 @@
-// Keeps a cheap picture of which workspaces are mid-merge, for the status bar and the agent guard
-// (a hook has 2 s and must not wait on Git). Refreshed on focus changes, after the plugin's own
+// Keeps a cheap picture of which workspaces are mid-merge (or mid-rebase, mid-cherry-pick), for the
+// status bar and the agent guard (a hook has 2 s and must not wait on Git). Refreshed on focus changes, after the plugin's own
 // operations, after agents run git, after saves, and on a slow timer for the focused workspace.
 import type { OrcaWorkerApi } from 'orca/worker'
-import { mergeMarkersSync } from '../git/mergeMarkers.ts'
-import type { JobState } from '../types.ts'
+import { operationSync } from '../git/mergeMarkers.ts'
+import type { JobState, OperationKind } from '../types.ts'
 import { m } from './messages.ts'
 import type { Workspaces } from './workspaces.ts'
 
 export interface MergeSnapshot {
+  /** A merge, rebase or cherry-pick is under way. */
   merging: boolean
   open: number
   total: number
   source: string | null
+  kind: OperationKind | null
+  /** Rebase / cherry-pick: which commit of how many. */
+  step: { current: number; total: number } | null
 }
 
 const POLL_MS = 20_000
@@ -54,10 +58,16 @@ export class Monitor {
    * workspaces count as not merging.
    */
   isMerging(workspaceId: string | null | undefined): boolean {
-    if (!workspaceId) return false
+    return this.operationOf(workspaceId) !== null
+  }
+
+  /** Synchronous like `isMerging`: what is under way (merge, rebase, cherry-pick), or null. */
+  operationOf(workspaceId: string | null | undefined): OperationKind | null {
+    if (!workspaceId) return null
     const path = this.workspaces.pathOf(workspaceId)
-    if (path) return mergeMarkersSync(path)
-    return !!this.snapshots.get(workspaceId)?.merging
+    if (path) return operationSync(path)
+    const snap = this.snapshots.get(workspaceId)
+    return snap?.merging ? (snap.kind ?? 'merge') : null
   }
 
   setFocused(workspaceId: string | null): void {
@@ -94,9 +104,11 @@ export class Monitor {
             merging: true,
             total: merge.conflicts.length,
             open: merge.conflicts.length - merge.markerFree.length,
-            source: merge.source
+            source: merge.source,
+            kind: merge.kind,
+            step: merge.step ? { current: merge.step.current, total: merge.step.total } : null
           }
-        : { merging: false, open: 0, total: 0, source: null }
+        : { merging: false, open: 0, total: 0, source: null, kind: null, step: null }
     } catch {
       snap = null
     }
@@ -160,13 +172,22 @@ export class Monitor {
         return
       }
       const ready = snap.total === 0 || snap.open === 0
+      const kind = snap.kind ?? 'merge'
+      const step = snap.step && snap.step.total > 1 ? ` ${snap.step.current}/${snap.step.total}` : ''
       await this.orca.host.call('statusBar.update', {
         id: 'merge',
         visible: true,
         icon: ready ? 'check' : 'warning',
         tone: ready ? 'accent' : 'warning',
-        text: ready ? m.statusMergeReady : m.statusConflictsOpen(snap.open),
-        tooltip: m.statusMergeTooltip(snap.source ?? '?')
+        text:
+          kind === 'merge'
+            ? ready
+              ? m.statusMergeReady
+              : m.statusConflictsOpen(snap.open)
+            : ready
+              ? m.statusStepReady(kind, step)
+              : m.statusStepConflicts(kind, step, snap.open),
+        tooltip: kind === 'merge' ? m.statusMergeTooltip(snap.source ?? '?') : m.statusStepTooltip(kind, snap.source ?? '?')
       })
     } catch (error) {
       this.orca.log(`status bar: ${(error as Error).message}`)

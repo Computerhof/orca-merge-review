@@ -2,6 +2,7 @@
 // Agents read these as instructions: keep them short, concrete and free of anything secret.
 // The wording lives in messages.ts, in the plugin's current language.
 import { m } from './messages.ts'
+import type { MergeInProgress, OperationKind } from '../types.ts'
 
 export function reviewFeedbackPrompt(input: {
   target: string
@@ -13,17 +14,28 @@ export function reviewFeedbackPrompt(input: {
   return [m.feedbackHead(input.source, input.target, where), '', input.note.trim(), '', m.feedbackTail].join('\n')
 }
 
+/**
+ * The launch prompt of a conflict agent. `op` (what `mergeSummary()` reports) names a rebase or
+ * cherry-pick and its rules; without it, or for a merge, the merge prompt.
+ */
 export function resolveConflictsPrompt(input: {
   target: string
   source: string
   files: readonly string[]
+  op?: Pick<MergeInProgress, 'kind' | 'step' | 'branch'> | null
 }): string {
-  return [
-    m.resolveIntro(input.source, input.target),
-    ...input.files.map((f) => `- ${f}`),
-    '',
-    m.resolveTask
-  ].join('\n')
+  const op = input.op
+  const files = input.files.map((f) => `- ${f}`)
+  if (!op || op.kind === 'merge') {
+    return [m.resolveIntro(input.source, input.target), ...files, '', m.resolveTask].join('\n')
+  }
+  const s = op.step
+  const step = s?.commit ? m.resolveStep(s.current, s.total, `${s.commit} ${s.subject ?? ''}`.trim()) : ''
+  const intro =
+    op.kind === 'rebase'
+      ? m.resolveIntroRebase(input.source, op.branch ?? input.target, step)
+      : m.resolveIntroPick(input.source, input.target, step)
+  return [intro, ...files, '', m.resolveTaskStep(op.kind)].join('\n')
 }
 
 export function mergeWatchPrompt(input: { base: string }): string {
@@ -55,9 +67,13 @@ export function testFixPrompt(input: {
 export const MERGE_HINT_TAG = '[Merge & Review]'
 
 /**
- * One line put in front of any prompt that reaches an agent in a workspace with a running merge.
- * One line on purpose: a prompt typed into a running agent's TUI is submitted on Enter.
+ * One line put in front of any prompt that reaches an agent in a workspace with a running merge,
+ * rebase or cherry-pick (`kind`, default merge). One line on purpose: a prompt typed into a
+ * running agent's TUI is submitted on Enter.
  */
-export function mergeHintPrompt(input: { source: string; open: number }): string {
-  return m.hint(MERGE_HINT_TAG, input.source, input.open ? m.hintOpen(input.open) : '')
+export function mergeHintPrompt(input: { source: string; open: number; kind?: OperationKind }): string {
+  const open = input.open ? m.hintOpen(input.open) : ''
+  return !input.kind || input.kind === 'merge'
+    ? m.hint(MERGE_HINT_TAG, input.source, open)
+    : m.hintStep(MERGE_HINT_TAG, input.kind, input.source, open)
 }
