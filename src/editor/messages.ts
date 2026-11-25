@@ -75,6 +75,8 @@ export const m = messages({
     // footer
     keysHelp: (version: string) =>
       `Merge & Review ${version} · Tasten: 1 Meins · 2 Eingehend · 3 Beide (erster offener Block) · n nächste Datei`,
+    keysHelpRebase: (version: string) =>
+      `Merge & Review ${version} · Tasten: 1 Neue Basis · 2 Dein Commit · 3 Beide (erster offener Block) · n nächste Datei`,
 
     // notices
     noMarkersLeftAsk: 'Keine Marker mehr in dieser Datei. Als gelöst markieren?',
@@ -161,6 +163,8 @@ export const m = messages({
     // footer
     keysHelp: (version: string) =>
       `Merge & Review ${version} · Keys: 1 mine · 2 incoming · 3 both (first open block) · n next file`,
+    keysHelpRebase: (version: string) =>
+      `Merge & Review ${version} · Keys: 1 new base · 2 your commit · 3 both (first open block) · n next file`,
 
     // notices
     noMarkersLeftAsk: 'No markers left in this file. Mark as resolved?',

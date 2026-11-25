@@ -7,6 +7,28 @@ oder einer Capability-Erweiterung, die Nutzer neu freigeben müssen.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-25
+
+### Hinzugefügt
+- **Rebase (E9/E10):** „Auf <Quelle> aktualisieren (Rebase)“ setzt den aktuellen Branch auf die Quelle, nicht
+  interaktiv. Die Bestätigung nennt die neu geschriebenen Commits und warnt mit zweitem Klick, wenn welche schon
+  gepusht sind (Force-Push nötig; das Plugin pusht nie). Auf dem Basis-Branch gesperrt (dort mergen).
+- **Cherry-Pick (E11):** Mehrfachauswahl in der Liste der eingehenden Commits, „N Commit(s) übernehmen“ wendet sie in
+  Historien-Reihenfolge mit `-x` an; Merge-Commits und schon enthaltene Commits werden abgelehnt.
+- **Konflikte für alle drei Vorgänge:** Kopf mit „Commit 2 von 5 (abc123 Betreff)“, „Weiter“, „Commit überspringen“,
+  „Rebase/Cherry-Pick abbrechen“. Die Seiten heißen beim Rebase richtig herum „Neue Basis“ und „Dein Commit“ (Git
+  vertauscht ours/theirs), auch in der Tastenhilfe des Tabs. Parken, Tests danach, Rückgängig, Status-Leiste,
+  „Agent löst Konflikte“ und der Palettenbefehl „Merge abschließen“ (setzt fort) gelten für alle drei.
+- **Agenten-Schutz (E12):** Während eines Rebase oder Cherry-Pick sind `--abort`/`--continue`/`--skip`/`--quit`,
+  neue Rebases/Picks und die Merge-Sperren aktiv; der Prompt-Hinweis nennt den Vorgang.
+- **Windows-Hinweis:** Das Panel sagt während eines Vorgangs unter Windows, dass der Agenten-Schutz nur protokolliert,
+  weil Orca die Ablehnung dort nicht weitergibt (stablyai/orca#49004, Issue #10). `RepoState.agentGuard`.
+- Protokoll: `rebase.run`, `pick.run`, `op.continue`, `op.skip`; `merge.abort` bricht jeden Vorgang ab;
+  `MergeInProgress` mit `kind`, `step`, `sides`, `branch`; `Comparison.rebase`.
+
+### Behoben
+- Die Erfolgsmeldung nach einem Merge verschwand sofort, weil das anschließende Neuvergleichen sie löschte.
+
 ## [0.4.0] - 2026-11-25
 
 ### Hinzugefügt

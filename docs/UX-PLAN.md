@@ -191,6 +191,9 @@ Konflikte werden wie beim Merge gelöst (Liste, breiter Tab, Blöcke, Speichern 
 | Zusätzlich | – | „Commit überspringen“ (`--skip`) | „Commit überspringen“ (`--skip`) |
 | Abbrechen | `merge --abort` | `rebase --abort` (Branch wie vorher) | `cherry-pick --abort` |
 
+**Umsetzungsstand (v0.5.0, 2026-11-25):** E9–E12 umgesetzt, mit Kern-Tests gegen echtes Git und Orca-Tests.
+Zusätzlich: kein Rebase auf dem Basis-Branch; Windows-Hinweis zum Agenten-Schutz. Live in Orca noch nicht geprüft.
+
 Erkennung synchron aus `.git` (wie `MERGE_HEAD`): `rebase-merge/` bzw. `rebase-apply/` und `CHERRY_PICK_HEAD`
 (`sequencer/` für mehrere Commits). Parken (E7) gilt auch hier. Rückgängig nach Abschluss: `ORIG_HEAD` (Rebase),
 bzw. der Stand vor dem ersten Pick.

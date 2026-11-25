@@ -705,7 +705,10 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
   const sel = new Set(read(picked))
   const chosen = c.incoming.filter((x) => sel.has(x.hash))
   // E9: rebasing needs a branch (c.rebase is null when detached) and something new on the source.
-  const rebaseBlocked = blockedBy ?? (!c.rebase ? m.blockedDetached : c.ahead === 0 ? m.rebaseNothing(src) : null)
+  // Rebasing the base branch (main) onto a work branch is almost never meant: merge there instead.
+  const rebaseBlocked =
+    blockedBy ??
+    (!c.rebase ? m.blockedDetached : st.base && st.branch === st.base ? m.rebaseOnBase(st.base) : c.ahead === 0 ? m.rebaseNothing(src) : null)
   const pushed = c.rebase?.pushed ?? 0
   return (
     <Stack gap="sm">
@@ -1049,6 +1052,12 @@ function ModeResolve({ st }: { st: RepoState }) {
           {finished ? m.stepResolved : m.stillWithMarkers(open.length, total)}
         </Callout>
       )}
+
+      {st.agentGuard === 'observes' ? (
+        <Callout tone="neutral" icon="info" title={m.guardObservesTitle}>
+          {m.guardObservesBody}
+        </Callout>
+      ) : null}
 
       {!finished ? (
         <Stack gap="sm">

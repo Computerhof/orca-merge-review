@@ -93,6 +93,12 @@ export interface RepoState {
   projectName: string | null
   /** An agent this panel started that never began its prompt (Orca did not send it). */
   stalledAgent: { terminalId: string } | null
+  /**
+   * Whether Orca lets the agent guard block a refused command: `blocks` on macOS and Linux,
+   * `observes` on Windows, where Orca answers Claude Code's PreToolUse without the plugin's
+   * decision (stablyai/orca#49004, issue #10 here); the refusal is then only logged.
+   */
+  agentGuard: 'blocks' | 'observes'
   /** Why the panel cannot work here, in words for the person; null when it can. */
   problem: string | null
   branch: string | null
@@ -202,7 +208,7 @@ export interface Overview {
 }
 
 export interface MergeOutcome {
-  /** `rebased` / `picked`: a rebase or cherry-pick finished; `skipped`: the last commit was skipped and the operation finished. */
+  /** `rebased` / `picked`: a rebase or cherry-pick finished (also when its last commit was skipped). */
   status: 'merged' | 'conflicts' | 'up-to-date' | 'squashed' | 'rebased' | 'picked'
   message: string
   conflicts: string[]

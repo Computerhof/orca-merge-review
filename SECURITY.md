@@ -17,7 +17,13 @@ starten, in Agent-Terminals schreiben und Orca-Automationen anlegen. Die Liste d
 - Dateioperationen bei Konflikten gelten nur für Dateien, die Git tatsächlich als ungemergt führt; Pfade mit `..`, absolute Pfade und NUL-Zeichen werden abgelehnt.
 - Der Review-Tab setzt Dateiinhalte, Commit-Nachrichten und Branch-Namen ausschließlich als Text ins DOM (kein `innerHTML`).
 - Der Agenten-Schutz ist eine **Leitplanke, keine Sicherheitsgrenze**: Er liest den Befehl wie eine Shell und erkennt typische zerstörerische Git-Befehle, ein entschlossener Prozess kann ihn umgehen (Skripte, Aliase, andere Werkzeuge als die Shell). Fällt der Worker aus, lässt Orca den Befehl durch (`onError: pass`), damit Agenten nicht blockiert werden.
-- **Bekannte Einschränkung (Orca 1.4.271):** Mit Claude Code im Modus „bypass permissions“ wurde ein abgelehnter Befehl trotzdem ausgeführt; das Plugin-Log (`orca plugin logs`) zeigt die Ablehnung („guard: refused …“). Ob Orca die Ablehnung in diesem Modus weitergibt, ist ungeklärt. Verlass dich während eines Merges nicht allein auf den Schutz.
+- **Unter Windows blockiert der Schutz nicht (Orca 1.4.271 bis mindestens 1.4.274).** Orcas Hook-Programm
+  (`orca-agent-hook.exe`) beantwortet Claude Codes `PreToolUse` unter Windows immer mit `{}`, ohne die Entscheidung
+  des Plugins; Orca hat Windows bewusst als „observe-only“ gebaut (stablyai/orca#37303). Belegt am 2026-11-25: Das
+  Plugin lehnte `git merge --abort` ab (Log „guard: refused …“), 13 ms später antwortete Orca Claude Code mit `{}`,
+  der Befehl lief. Feature-Wunsch bei Orca: stablyai/orca#49004; Nacharbeit hier: Issue #10. Das Panel weist unter
+  Windows während eines Merges, Rebase oder Cherry-Pick darauf hin. Unter macOS und Linux wartet Claude Code auf
+  die Entscheidung. Verlass dich während eines Vorgangs nie allein auf den Schutz.
 - Ob ein Merge läuft, entscheidet der Hook synchron an Gits Markerdateien (`MERGE_HEAD`, `SQUASH_MSG`), ohne Git zu starten.
 - Der **Testbefehl** wird pro Orca-Projekt im Panel festgelegt und im Plugin-Speicher auf deinem Rechner abgelegt,
   nie im Repo; ein fremder Branch kann ihn also nicht einschleusen. Den Vorschlag aus den Projektdateien übernimmt

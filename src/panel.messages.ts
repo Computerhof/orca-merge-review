@@ -191,6 +191,10 @@ export const m = messages({
     rebaseOnto: (source: string) => `Auf ${source} aktualisieren (Rebase)`,
     parkAndRebase: (source: string) => `Änderungen parken und auf ${source} aktualisieren (Rebase)`,
     rebaseNothing: (source: string) => `Nichts zu aktualisieren: ${source} hat keine Commits, die hier fehlen.`,
+    rebaseOnBase: (base: string) => `${base} ist der Basis-Branch: hier mergen statt rebasen (ein Rebase würde ${base} neu schreiben).`,
+    guardObservesTitle: 'Agenten-Schutz unter Windows nur protokollierend',
+    guardObservesBody:
+      'Orca gibt die Ablehnung unter Windows derzeit nicht an Claude Code weiter (Orca-Issue #49004): Befehle wie „git merge --abort“ würden trotzdem laufen. Agenten in diesem Workspace bis zum Abschluss besser nicht arbeiten lassen.',
     confirmRebaseTitle: (branch: string | null, source: string) => `${branch} auf ${source} aktualisieren?`,
     confirmRebaseSummary: (commits: number, branch: string | null, source: string, agentWorking: boolean) =>
       (commits
@@ -480,6 +484,10 @@ export const m = messages({
     rebaseOnto: (source: string) => `Update onto ${source} (rebase)`,
     parkAndRebase: (source: string) => `Park changes and update onto ${source} (rebase)`,
     rebaseNothing: (source: string) => `Nothing to update: ${source} has no commits missing here.`,
+    rebaseOnBase: (base: string) => `${base} is the base branch: merge here instead of rebasing (a rebase would rewrite ${base}).`,
+    guardObservesTitle: 'Agent guard only logs on Windows',
+    guardObservesBody:
+      'On Windows Orca does not pass the refusal on to Claude Code yet (Orca issue #49004): commands like "git merge --abort" would still run. Better keep agents in this workspace idle until this is finished.',
     confirmRebaseTitle: (branch: string | null, source: string) => `Update ${branch} onto ${source}?`,
     confirmRebaseSummary: (commits: number, branch: string | null, source: string, agentWorking: boolean) =>
       (commits

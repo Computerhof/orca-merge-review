@@ -578,7 +578,9 @@ function hunkCard(h: ConflictHunk, total: number, sides: ReturnType<typeof sideN
 }
 
 function footer(): HTMLElement {
-  return el('footer', { class: 'muted small' }, m.keysHelp(VERSION))
+  // During a rebase key 1 takes the new base and key 2 the replayed commit (see the side names).
+  const help = repo?.merge?.kind === 'rebase' ? m.keysHelpRebase(VERSION) : m.keysHelp(VERSION)
+  return el('footer', { class: 'muted small' }, help)
 }
 
 // ------------------------------------------------------------------ keys

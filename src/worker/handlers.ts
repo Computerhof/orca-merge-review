@@ -6,6 +6,9 @@ import { UserError } from '../core/repo.ts'
 import type { RepoState, ReviewView } from '../types.ts'
 import { deliverToAgent, launchAgent, type PendingSends } from './agents.ts'
 import { getLocale, localeOf, setLocale } from '../i18n/index.ts'
+
+/** Orca forwards the guard's refusal to Claude Code except on Windows (stablyai/orca#49004). */
+const AGENT_GUARD: 'blocks' | 'observes' = process.platform === 'win32' ? 'observes' : 'blocks'
 import type { Memory } from './memory.ts'
 import { m } from './messages.ts'
 import type { Monitor } from './monitor.ts'
@@ -81,7 +84,8 @@ export function registerHandlers(deps: Deps): void {
           testCommand: null,
           suggestedTest: null,
           projectName: null,
-          stalledAgent: null
+          stalledAgent: null,
+          agentGuard: AGENT_GUARD
         }
       }
       // One ref listing serves the state, the base guess and the source list.
@@ -113,7 +117,8 @@ export function registerHandlers(deps: Deps): void {
         testCommand: await projectTestCommand(memory, ws),
         suggestedTest: await suggestTestCommand(ws),
         projectName: ws.row.project ?? null,
-        stalledAgent: pending.stalledOf(ws.info.id)
+        stalledAgent: pending.stalledOf(ws.info.id),
+        agentGuard: AGENT_GUARD
       }
     })
   )

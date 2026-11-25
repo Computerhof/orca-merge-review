@@ -12,6 +12,7 @@ const base: RepoState = {
   suggestedTest: null,
   projectName: 'app',
   stalledAgent: null,
+  agentGuard: 'blocks',
   problem: null,
   branch: 'main',
   head: 'h0',
@@ -577,5 +578,40 @@ test('English UI: the rebase button', async () => {
   await view.press({ text: 'Update onto main (rebase)' })
   assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /1 commit of feature will be rewritten/)
   assert.ok(view.find({ text: 'Yes, update' }))
+  await view.unmount()
+})
+
+test('on Windows the panel says during an operation that the agent guard only logs (Orca #49004)', async () => {
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: { 'repo.state': () => ({ ...base, agentGuard: 'observes', merge: mergeOp(['a.txt'], []) }) }
+  })
+  const view = await mount(panel, { host, locale: 'de-DE' })
+  await view.settled()
+  assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /Agenten-Schutz unter Windows nur protokollierend/)
+  await view.unmount()
+  const blocking = await mount(panel, {
+    host: mockHost({ capabilities: CAPS, requests: { 'repo.state': () => ({ ...base, merge: mergeOp(['a.txt'], []) }) } }),
+    locale: 'de-DE'
+  })
+  await blocking.settled()
+  assert.ok(!/nur protokollierend/.test(blocking.summary().join('\n') + JSON.stringify(blocking.tree())))
+  await blocking.unmount()
+})
+
+test('E9: no rebase of the base branch itself; merging there is the way', async () => {
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => base,
+      'repo.compare': () => ({ ...comparison, rebase: { commits: 2, pushed: 0, upstream: null } }),
+      'watch.get': () => ({ watch: null })
+    }
+  })
+  const view = await mount(panel, { host, locale: 'de-DE' })
+  await view.settled()
+  const button = view.find({ text: 'Auf feature aktualisieren (Rebase)' })
+  assert.ok(button)
+  assert.equal(button?.props.disabled, true)
   await view.unmount()
 })
