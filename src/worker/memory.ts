@@ -30,7 +30,8 @@ const key = {
   pending: (ws: string) => `pendingMerge:${ws}`,
   parked: (ws: string) => `parked:${ws}`,
   testCommand: (project: string) => `testCommand:${project}`,
-  watched: 'watchedSources'
+  watched: 'watchedSources',
+  locale: 'locale'
 }
 
 export class Memory {
@@ -49,6 +50,8 @@ export class Memory {
     else await this.orca.storage.set(k, value as never)
   }
 
+  locale = () => this.get<string>(key.locale)
+  setLocale = (locale: string) => this.put(key.locale, locale)
   lastSource = (ws: string) => this.get<string>(key.lastSource(ws))
   setLastSource = (ws: string, source: string) => this.put(key.lastSource(ws), source)
 

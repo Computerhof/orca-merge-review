@@ -2,6 +2,8 @@
 // Handles the default `merge` style and `diff3`/`zdiff3` (with a `|||||||` base section).
 // Line endings are kept exactly as they are in the file (CRLF stays CRLF).
 
+import { m } from './messages.ts'
+
 export type ConflictChoice = 'ours' | 'theirs' | 'both' | 'base'
 
 export interface TextSegment {
@@ -134,7 +136,7 @@ function chosenLines(conflict: ConflictSegment, choice: ConflictChoice): string[
     case 'theirs':
       return conflict.theirs
     case 'base':
-      if (!conflict.base) throw new Error('Diese Datei enthält keinen Basis-Abschnitt (diff3).')
+      if (!conflict.base) throw new Error(m.noBaseSection)
       return conflict.base
     case 'both': {
       // Make sure the two halves do not run together on one line.
@@ -173,7 +175,7 @@ export function resolveConflict(text: string, index: number, choice: ConflictCho
       out.push(...renderConflict(segment, fileEol))
     }
   }
-  if (!found) throw new Error(`Konflikt ${index + 1} gibt es in dieser Datei nicht (mehr).`)
+  if (!found) throw new Error(m.conflictGone(index + 1))
   return out.join('')
 }
 

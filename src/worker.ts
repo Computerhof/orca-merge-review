@@ -3,11 +3,14 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import { commandOf, guardDecision, runsGit } from './core/gitGuard.ts'
 import { LocalGitRunner } from './git/runner.ts'
+import { m as core } from './core/messages.ts'
+import { localeOf, setLocale } from './i18n/index.ts'
 import { PendingSends } from './worker/agents.ts'
 import { Jobs } from './worker/jobs.ts'
 import { onSave, promptHint } from './worker/circles.ts'
 import { registerHandlers } from './worker/handlers.ts'
 import { Memory } from './worker/memory.ts'
+import { m } from './worker/messages.ts'
 import { Monitor } from './worker/monitor.ts'
 import { openReviewTab } from './worker/reviewTab.ts'
 import { SettingsCache } from './worker/settings.ts'
@@ -27,6 +30,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   const pending = new PendingSends(orca)
   pendingSends = pending
   void workspaces.list().catch(() => {}) // hooks map workspace ids synchronously from this listing
+  // Texts in the language the panel last reported (the worker cannot read Orca's UI language).
+  setLocale(localeOf((await memory.locale().catch(() => null)) ?? 'de'))
   monitor = new Monitor(orca, workspaces)
   const mon = monitor
   mon.jobOf = (id) => jobRunner.get(id)
@@ -48,7 +53,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       await orca.host
         .call('notifications.show', {
           title: 'Merge & Review',
-          body: `Agent in „${watched.source}“ ist fertig. Neu vergleichen?`
+          body: m.agentDone(watched.source)
         })
         .catch(() => {})
     }
@@ -90,26 +95,26 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   orca.commands.register('mergeReview.open', async () => {
     const ws = await workspaces.resolve()
     await openReviewTab(orca, ws, { view: 'overview', source: (await memory.lastSource(ws.info.id)) ?? undefined })
-    return 'Merge & Review geöffnet.'
+    return m.opened
   })
 
   orca.commands.register('mergeReview.nextConflict', async () => {
     const ws = await workspaces.resolve()
     const st = await ws.repo.state()
-    if (!st.merge) return 'Es läuft kein Merge.'
+    if (!st.merge) return core.noMergeRunning
     const next = st.merge.conflicts.find((f) => !st.merge!.markerFree.includes(f))
-    if (!next) return 'Alle Konflikte sind aufgelöst. Jetzt den Merge abschließen.'
+    if (!next) return m.allConflictsResolved
     await openReviewTab(orca, ws, { view: 'conflict', path: next })
-    return `Konflikt in ${next}`
+    return m.conflictIn(next)
   })
 
   orca.commands.register('mergeReview.compareBase', async () => {
     const ws = await workspaces.resolve()
     const base = await ws.repo.baseBranch()
-    if (!base || base === ws.row.branch) return 'Kein anderer Base-Branch gefunden.'
+    if (!base || base === ws.row.branch) return m.noOtherBase
     await memory.setLastSource(ws.info.id, base)
     await openReviewTab(orca, ws, { view: 'overview', source: base })
-    return `Vergleich mit ${base}`
+    return m.compareWith(base)
   })
 
   orca.commands.register('mergeReview.finish', async () => {
@@ -121,7 +126,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
       await memory.setPending(ws.info.id, null)
     }
     mon.schedule(ws.info.id, 'command')
-    return `Merge abgeschlossen (${hash.slice(0, 8)}).`
+    return m.mergeFinished(hash.slice(0, 8))
   })
 
   await settings.start(orca)

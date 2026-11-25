@@ -7,6 +7,15 @@ oder einer Capability-Erweiterung, die Nutzer neu freigeben müssen.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-25
+
+### Hinzugefügt
+- **Englisch:** Panel, Review-Tab, Statusleiste, Meldungen, Ablehnungen des Agenten-Schutzes, Agenten-Prompts,
+  Merge-Wächter und Markdown-Export folgen Orcas Sprache (Deutsch oder Englisch; andere Sprachen → Englisch). Das Panel
+  meldet die Sprache dem Worker (`ui.locale`), der sie sich merkt. Texte stehen in Katalogen je Bereich
+  (`src/i18n`, `*/messages.ts`); fehlende Übersetzungen fallen im Typecheck auf. Die deutschen Texte sind unverändert.
+  Das Manifest bleibt deutsch (Orca übersetzt Plugin-Manifeste nicht).
+
 ## [0.3.1] - 2026-11-25
 
 ### Behoben

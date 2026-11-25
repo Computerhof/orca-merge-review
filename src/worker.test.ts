@@ -312,3 +312,25 @@ test('park and merge: uncommitted changes are parked, merged around, and come ba
     await worker.deactivate()
   }
 })
+
+test('once the panel reports English, the worker answers in English', async () => {
+  const dir = divergentRepo()
+  const host = mockHost({
+    results: hostResults(dir, {
+      'workspace.readContext': { workspaceId: 'ws-feature', branch: 'feature', displayName: 'agent-feature', terminals: [] },
+      'automation.create': { automationId: 'auto-1' }
+    })
+  })
+  const worker = await mountWorker(main, { host, ...manifest })
+  try {
+    assert.deepEqual(await worker.request('ui.locale', { locale: 'en-US' }), { locale: 'en' })
+    await assert.rejects(worker.request('repo.compare', { source: 'nope' }), /"nope" is not a branch or commit in this repository\./)
+    await worker.request('watch.set', { workspaceId: 'ws-feature', enabled: true })
+    const p = host.callsOf('automation.create')[0] as { name: string; prompt: string }
+    assert.match(p.name, /^Merge watch: main/)
+    assert.match(p.prompt, /Change nothing/)
+  } finally {
+    await worker.request('ui.locale', { locale: 'de' })
+    await worker.deactivate()
+  }
+})

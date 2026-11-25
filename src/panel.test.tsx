@@ -50,7 +50,7 @@ test('compare mode: prediction, warning about a working agent, merge needs a sec
       }
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   const summary = view.summary().join('\n')
   assert.match(summary, /1 Konflikt-Datei\(en\) erwartet/)
@@ -88,7 +88,7 @@ test('K10: on the base workspace the panel lists the project workspaces; a row c
       })
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   const text = view.summary().join('\n') + JSON.stringify(view.tree())
   assert.match(text, /Workspaces des Projekts · 1 bereit · 1 mit Konflikten/)
@@ -128,7 +128,7 @@ test('K11: red tests after a merge show the output and offer an agent fix', asyn
       }
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   const text = view.summary().join('\n') + JSON.stringify(view.tree())
   assert.match(text, /Tests rot \(Exit 1\)\./)
@@ -155,7 +155,7 @@ test('uncommitted changes are shown plainly; the merge parks them first', async 
       }
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   const text = view.summary().join('\n') + JSON.stringify(view.tree())
   assert.match(text, /2 nicht committete Änderung\(en\)/)
@@ -183,7 +183,7 @@ test('the project test command: a detected suggestion is offered, never saved by
       }
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /Tests für app: keine/)
   assert.equal(saved.length, 0)
@@ -208,7 +208,7 @@ test('changes still parked after a merge are offered back', async () => {
       }
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   assert.match(view.summary().join('\n'), /1 geparkte Änderung\(en\) liegen im Stash/)
   await view.press({ text: 'Zurückholen' })
@@ -231,7 +231,7 @@ test('a first load that fails shows why and offers to try again, instead of spin
       'overview.list': () => ({ base: 'main', rows: [] })
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /Git antwortet nicht/)
   await view.press({ text: 'Erneut laden' })
@@ -255,7 +255,7 @@ test('an agent that never got its launch prompt is shown, and the prompt is type
       }
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /hat seinen Auftrag nicht bekommen/)
   await view.press({ text: 'Auftrag eintippen' })
@@ -279,7 +279,7 @@ test('long file lists are paged: the first 200 rows, more on scrolling', async (
       'watch.get': () => ({ watch: null })
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   const tree = JSON.stringify(view.tree())
   // f350 is past the first page (and past the note's file choice, which lists 300).
@@ -303,7 +303,7 @@ test('resolve mode lists conflicts; abort needs confirmation', async () => {
       }
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   assert.match(view.summary().join('\n'), /Merge feature → main läuft/)
   assert.ok(view.find({ text: 'Als gelöst markieren' }))
@@ -319,9 +319,27 @@ test('finish mode when nothing is unresolved', async () => {
     capabilities: CAPS,
     requests: { 'repo.state': () => ({ ...base, merge: { source: 'feature', conflicts: [], markerFree: [] } }) }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
   assert.match(view.summary().join('\n'), /Alle Konflikte gelöst/)
   assert.ok(view.find({ text: 'Merge abschließen' }))
+  await view.unmount()
+})
+
+test('English UI: the panel speaks English when Orca runs in English', async () => {
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => base,
+      'repo.compare': () => comparison,
+      'watch.get': () => ({ watch: null })
+    }
+  })
+  const view = await mount(panel, { host, locale: 'en-US' })
+  await view.settled()
+  assert.ok(view.find({ text: 'Merge feature into main' }))
+  assert.match(view.summary().join('\n'), /1 conflicting file expected/)
+  assert.deepEqual(view.refusals, [])
+  assert.deepEqual(view.errors, [])
   await view.unmount()
 })

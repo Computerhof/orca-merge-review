@@ -155,3 +155,42 @@ Konfliktdateien werden automatisch als gelöst markiert, mit Hinweis; abschaltba
 Kleinere Ergänzungen: Der Review-Tab übernimmt Schrift und Größe von Orcas Editor
 (`editor.readTypography`). Notizen im Tab bleiben pro Datei erhalten und lassen sich mit Vergleich, Commits
 und Dateien als Markdown speichern (`files.saveAs`), z. B. für einen PR-Text.
+
+**Live-Stand (2026-11-25, Orca 1.4.273):** Parken + mergen (auch mit Überschneidung und „Zurückholen“), Tests nach
+dem Merge (grün und rot, „Im Terminal ansehen“), Merge-Hinweis an einen echten Agenten über `orca terminal send`,
+Status-Leiste und Review-Tab im Orca-Fenster bestätigt. Offen bzw. Orca-seitig begrenzt: der Hinweis fehlt beim
+Start-Prompt von `orca agent launch`; vom Plugin gestartete Agenten bekommen ihren Start-Prompt nicht (v0.3.1 zeigt
+das an, „Auftrag eintippen“); „Zum Agenten“ öffnete nur den Workspace (v0.3.1 loggt den Grund);
+Speichern = gelöst mit echtem Editor-Speichern noch ungeprüft.
+
+## 7. v0.5: Rebase und Cherry-Pick (Entscheidungen 2026-11-25)
+
+**E9 Rebase nur zum Aktualisieren.** Ein Knopf „Auf <Quelle> aktualisieren (Rebase)“ im Vergleichen-Modus setzt
+den aktuellen Branch auf die Quelle, nicht interaktiv (`git rebase <quelle>`). Kein Umsortieren, Squashen oder
+Umbenennen von Commits.
+
+**E10 Gepushte Branches: warnen und bestätigen.** Hat der Branch Commits, die sein Upstream schon kennt, sagt die
+Bestätigung „schon gepusht: danach ist ein Force-Push nötig“ und verlangt einen zweiten Klick. Das Plugin pusht nie.
+
+**E11 Cherry-Pick aus der Commit-Liste.** Die Tabelle „Eingehende Commits“ erlaubt Mehrfachauswahl; „N Commits
+übernehmen (Cherry-Pick)“ wendet sie in Historien-Reihenfolge an, mit Herkunftsvermerk (`-x`).
+
+**E12 Gleicher Agenten-Schutz.** Während eines Rebase oder Cherry-Pick gelten dieselben Sperren wie beim Merge
+(kein `--abort`/`--continue`/`--skip`, kein reset/checkout/stash des ganzen Baums, gelöste Dateien nur mit
+`git add`), und der Prompt-Hinweis nennt den laufenden Vorgang.
+
+### Modus B für Rebase und Cherry-Pick
+
+Konflikte werden wie beim Merge gelöst (Liste, breiter Tab, Blöcke, Speichern = gelöst). Unterschiede:
+
+| | Merge | Rebase | Cherry-Pick |
+|---|---|---|---|
+| Kopf | „Merge X → Y läuft“ | „Rebase auf X läuft · Commit 2 von 5 (abc123 Betreff)“ | „Cherry-Pick läuft · Commit 1 von 2 (abc123 Betreff)“ |
+| „Meins“ / „Eingehend“ | aktueller Branch / Quelle | **Basis X** / **der gerade angewendete Commit** (Git vertauscht die Seiten beim Rebase; das Plugin beschriftet sie richtig) | aktueller Branch / gepickter Commit |
+| Weiter | „Merge abschließen“ (Commit) | „Weiter“ (`rebase --continue`, nächster Commit) | „Weiter“ (`cherry-pick --continue`) |
+| Zusätzlich | – | „Commit überspringen“ (`--skip`) | „Commit überspringen“ (`--skip`) |
+| Abbrechen | `merge --abort` | `rebase --abort` (Branch wie vorher) | `cherry-pick --abort` |
+
+Erkennung synchron aus `.git` (wie `MERGE_HEAD`): `rebase-merge/` bzw. `rebase-apply/` und `CHERRY_PICK_HEAD`
+(`sequencer/` für mehrere Commits). Parken (E7) gilt auch hier. Rückgängig nach Abschluss: `ORIG_HEAD` (Rebase),
+bzw. der Stand vor dem ersten Pick.

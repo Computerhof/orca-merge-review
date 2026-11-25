@@ -3,19 +3,24 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import { mergeWatchPrompt } from '../core/prompts.ts'
 import type { MergeWatch } from '../types.ts'
+import { m } from './messages.ts'
 import type { Resolved } from './workspaces.ts'
 
-const NAME_PREFIX = 'Merge-Wächter: '
+/** An automation's name starts with the watch prefix of the language it was made in; find them all. */
+const NAME_PREFIXES = ['Merge-W\u00e4chter: ', 'Merge watch: ']
+
+const prefixOf = (name: string) => NAME_PREFIXES.find((p) => name.startsWith(p))
 
 export async function findWatch(orca: OrcaWorkerApi, workspaceId: string): Promise<MergeWatch | null> {
   const { automations } = await orca.host.call('automation.list')
   const a = automations.find(
-    (x) => x.createdByThisPlugin && x.workspaceId === workspaceId && x.name.startsWith(NAME_PREFIX)
+    (x) => x.createdByThisPlugin && x.workspaceId === workspaceId && prefixOf(x.name)
   )
   if (!a) return null
+  const prefix = prefixOf(a.name) ?? ''
   return {
     automationId: a.id,
-    base: a.name.slice(NAME_PREFIX.length).split(' → ')[0] ?? '',
+    base: a.name.slice(prefix.length).split(' → ')[0] ?? '',
     schedule: a.schedule ?? '',
     enabled: a.enabled,
     nextRunAt: a.nextRunAt
@@ -39,7 +44,7 @@ export async function setWatch(
   }
   if (!options.enabled) return null
   await orca.host.call('automation.create', {
-    name: `${NAME_PREFIX}${base} → ${ws.row.branch ?? ws.info.name}`,
+    name: `${m.watchPrefix}${base} → ${ws.row.branch ?? ws.info.name}`,
     prompt: mergeWatchPrompt({ base }),
     agent: options.agent,
     workspaceId: ws.info.id,

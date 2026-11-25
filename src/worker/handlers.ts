@@ -1,10 +1,13 @@
 // Answers the panel's and the review tab's requests. Thin: Git work lives in core/repo.ts.
 import type { OrcaWorkerApi } from 'orca/worker'
+import { m as core } from '../core/messages.ts'
 import { resolveConflictsPrompt, reviewFeedbackPrompt, testFixPrompt } from '../core/prompts.ts'
 import { UserError } from '../core/repo.ts'
 import type { RepoState, ReviewView } from '../types.ts'
 import { deliverToAgent, launchAgent, type PendingSends } from './agents.ts'
+import { getLocale, localeOf, setLocale } from '../i18n/index.ts'
 import type { Memory } from './memory.ts'
+import { m } from './messages.ts'
 import type { Monitor } from './monitor.ts'
 import { openReviewTab } from './reviewTab.ts'
 import type { SettingsCache } from './settings.ts'
@@ -50,7 +53,7 @@ export function registerHandlers(deps: Deps): void {
 
   /**
    * Brings changes parked for a merge back. `careful`: not when the merge changed the same files
-   * (then they stay parked and the panel offers "Zurückholen").
+   * (then they stay parked and the panel offers to restore them).
    */
   const restoreParked = async (ws: Resolved, careful: boolean): Promise<string> => {
     const p = await memory.parked(ws.info.id)
@@ -59,11 +62,11 @@ export function registerHandlers(deps: Deps): void {
     if (r === 'restored' || r === 'missing') await memory.setParked(ws.info.id, null)
     orca.log(`parked changes: ${r}`)
     return r === 'restored'
-      ? ' Deine geparkten Änderungen sind zurück.'
+      ? m.parkedBack
       : r === 'overlap'
-        ? ' Deine geparkten Änderungen liegen noch im Stash, weil der Merge dieselben Dateien geändert hat (Panel: „Zurückholen“).'
+        ? m.parkedOverlap
         : r === 'conflict'
-          ? ' Beim Zurückholen deiner geparkten Änderungen gab es Konflikte; sie liegen weiter im Stash.'
+          ? m.parkedConflict
           : ''
   }
   /** K11: after a successful merge, the tests run by themselves when a command is set. */
@@ -169,11 +172,11 @@ export function registerHandlers(deps: Deps): void {
         await ws.repo.verify(source)
         const { ahead: commits } = await ws.repo.aheadBehind('HEAD', source)
         if (park && (await ws.repo.dirtyFiles(true)).length) {
-          if (await ws.repo.mergeSummary()) throw new UserError('Es läuft schon ein Merge. Erst abschließen oder abbrechen.')
+          if (await ws.repo.mergeSummary()) throw new UserError(core.mergeAlreadyRunning)
           if (await memory.parked(ws.info.id)) {
-            throw new UserError('Es liegen noch geparkte Änderungen von einem früheren Merge im Stash. Erst zurückholen.')
+            throw new UserError(m.parkedStillThere)
           }
-          const parked = await ws.repo.park(`Merge & Review: geparkt vor dem Merge von ${source}`)
+          const parked = await ws.repo.park(m.stashMessage(source))
           await memory.setParked(ws.info.id, { ...parked, source, before, at: Date.now() })
         }
         let outcome
@@ -186,7 +189,7 @@ export function registerHandlers(deps: Deps): void {
         if (outcome.status === 'conflicts') {
           await memory.setPending(ws.info.id, { source, before, commits })
           if (await memory.parked(ws.info.id)) {
-            outcome = { ...outcome, message: `${outcome.message} Deine geparkten Änderungen kommen nach dem Abschluss oder Abbruch zurück.` }
+            outcome = { ...outcome, message: m.parkedReturnLater(outcome.message) }
           }
           await openReviewTab(orca, ws, { view: 'overview', source }).catch((e) => orca.log(String(e)))
         } else {
@@ -233,7 +236,7 @@ export function registerHandlers(deps: Deps): void {
           await memory.setPending(ws.info.id, null)
         }
         const note = await restoreParked(ws, true)
-        void orca.host.call('notifications.show', { title: 'Merge & Review', body: `Merge abgeschlossen.${note}` }).catch(() => {})
+        void orca.host.call('notifications.show', { title: 'Merge & Review', body: m.mergeDoneNotice(note) }).catch(() => {})
         await testAfterMerge(ws, p?.source ?? null)
         return { hash }
       },
@@ -248,7 +251,7 @@ export function registerHandlers(deps: Deps): void {
       async ({ workspaceId }) => {
         const ws = await workspaces.resolve(workspaceId)
         const last = await memory.lastMerge(ws.info.id)
-        if (!last) throw new UserError('Hier gibt es keinen Merge, der sich rückgängig machen lässt.')
+        if (!last) throw new UserError(m.nothingToUndo)
         await ws.repo.undoMerge(last.before, last.after)
         await memory.setLastMerge(ws.info.id, null)
         return { ok: true as const }
@@ -319,10 +322,10 @@ export function registerHandlers(deps: Deps): void {
   orca.panels.handle(
     'agent.feedback',
     guarded(deps, async ({ workspaceId, source, path, note }) => {
-      if (!note.trim()) throw new UserError('Die Anmerkung ist leer.')
+      if (!note.trim()) throw new UserError(m.noteEmpty)
       const ws = await workspaces.resolve(workspaceId)
       const target = await workspaces.workspaceOfBranch(ws, source)
-      if (!target) throw new UserError(`Zu „${source}“ gibt es keinen Orca-Workspace mit Agent.`)
+      if (!target) throw new UserError(m.noAgentWorkspace(source))
       const prompt = reviewFeedbackPrompt({ target: ws.row.branch ?? ws.info.name, source, path, note })
       await memory.watch(target.id, { targetWorkspaceId: ws.info.id, source })
       return deliverToAgent(orca, pending, target.id, prompt, settings.current.agent, ws.info.id)
@@ -334,9 +337,9 @@ export function registerHandlers(deps: Deps): void {
     guarded(deps, async ({ workspaceId }) => {
       const ws = await workspaces.resolve(workspaceId)
       const [merge, branch] = await Promise.all([ws.repo.mergeSummary(), ws.repo.currentBranch()])
-      if (!merge) throw new UserError('Es läuft kein Merge.')
+      if (!merge) throw new UserError(core.noMergeRunning)
       const open = merge.conflicts.filter((f) => !merge.markerFree.includes(f))
-      if (!open.length) throw new UserError('Alle Konflikte sind schon aufgelöst.')
+      if (!open.length) throw new UserError(m.allResolvedAlready)
       const prompt = resolveConflictsPrompt({ target: branch ?? ws.info.name, source: merge.source, files: open })
       const terminalId = await launchAgent(orca, pending, ws.info.id, settings.current.agent, prompt)
       return { how: 'launched' as const, terminalId }
@@ -350,8 +353,8 @@ export function registerHandlers(deps: Deps): void {
       async ({ workspaceId }) => {
         const ws = await workspaces.resolve(workspaceId)
         const p = await memory.parked(ws.info.id)
-        if (!p) throw new UserError('Es gibt keine geparkten Änderungen.')
-        if (await ws.repo.mergeSummary()) throw new UserError('Erst den laufenden Merge abschließen oder abbrechen.')
+        if (!p) throw new UserError(m.noParked)
+        if (await ws.repo.mergeSummary()) throw new UserError(m.finishMergeFirst)
         const result = await ws.repo.unpark(p.sha, p.files)
         if (result !== 'conflict') await memory.setParked(ws.info.id, null)
         return { result: result as 'restored' | 'missing' | 'conflict' }
@@ -359,6 +362,16 @@ export function registerHandlers(deps: Deps): void {
       touches
     )
   )
+
+  orca.panels.handle('ui.locale', async ({ locale }) => {
+    const l = localeOf(locale)
+    if (l !== getLocale()) {
+      setLocale(l)
+      await memory.setLocale(l)
+      monitor.schedule(null, 'locale') // status bar texts in the new language
+    }
+    return { locale: l }
+  })
 
   orca.panels.handle(
     'ui.sourceControl',
@@ -393,8 +406,8 @@ export function registerHandlers(deps: Deps): void {
     guarded(deps, async ({ workspaceId }) => {
       const ws = await workspaces.resolve(workspaceId)
       const command = await projectTestCommand(memory, ws)
-      if (!command) throw new UserError('Für dieses Projekt ist kein Testbefehl festgelegt.')
-      return orca.host.call('terminal.create', { workspaceId: ws.info.id, title: 'Merge & Review: Tests', command })
+      if (!command) throw new UserError(m.noTestCommand)
+      return orca.host.call('terminal.create', { workspaceId: ws.info.id, title: m.testsTerminalTitle, command })
     })
   )
 
@@ -403,7 +416,7 @@ export function registerHandlers(deps: Deps): void {
     guarded(deps, async ({ workspaceId }) => {
       const ws = await workspaces.resolve(workspaceId)
       const job = jobs.get(ws.info.id)
-      if (!job || job.status !== 'failed' || !job.command) throw new UserError('Es gibt keinen roten Testlauf.')
+      if (!job || job.status !== 'failed' || !job.command) throw new UserError(m.noRedRun)
       const prompt = testFixPrompt({
         target: ws.row.branch ?? ws.info.name,
         source: job.source,
@@ -421,7 +434,7 @@ export function registerHandlers(deps: Deps): void {
     guarded(deps, async ({ workspaceId, command }) => {
       const ws = await workspaces.resolve(workspaceId)
       const value = command.trim()
-      if (value.length > 500 || /[\r\n\0]/.test(value)) throw new UserError('Der Testbefehl muss eine Zeile sein (höchstens 500 Zeichen).')
+      if (value.length > 500 || /[\r\n\0]/.test(value)) throw new UserError(m.testCommandOneLine)
       await memory.setTestCommand(projectKey(ws), value || null)
       return { testCommand: value || null }
     })
@@ -434,9 +447,7 @@ export function registerHandlers(deps: Deps): void {
       try {
         await pending.retry(ws.info.id)
       } catch (error) {
-        throw new UserError(
-          `Orca hat das Eintippen abgelehnt (${(error as Error).message}). Bitte den Auftrag im Terminal des Agenten selbst abschicken.`
-        )
+        throw new UserError(m.typingRefused((error as Error).message))
       }
       return { ok: true as const }
     }, true)
@@ -493,7 +504,7 @@ export function registerHandlers(deps: Deps): void {
       const ws = await workspaces.resolve(workspaceId)
       const base = (await ws.repo.baseBranch()) ?? 'main'
       if (base === ws.row.branch && !remove) {
-        throw new UserError('Dieser Workspace ist selbst die Base. Der Merge-Wächter gehört in einen Feature-Workspace.')
+        throw new UserError(m.watchOnBase)
       }
       const watch = await setWatch(orca, ws, base, {
         enabled,

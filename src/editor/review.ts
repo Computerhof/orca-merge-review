@@ -6,6 +6,7 @@ import { sideBySide } from '../core/diffview.ts'
 import { reviewMarkdown, type ReviewNote } from '../core/reviewExport.ts'
 import { defined } from '../defined.ts'
 import { VERSION } from '../version.ts'
+import { localeOf, setLocale } from '../i18n/index.ts'
 import type {
   Comparison,
   ConflictChoice,
@@ -16,6 +17,7 @@ import type {
   SourceOption
 } from '../types.ts'
 import { STYLES } from './styles.ts'
+import { m } from './messages.ts'
 
 // ------------------------------------------------------------------ tiny DOM helpers
 
@@ -112,8 +114,8 @@ async function reload(): Promise<void> {
 }
 
 function firstOpen(): string | null {
-  const m = repo?.merge
-  return m ? (m.conflicts.find((f) => !m.markerFree.includes(f)) ?? null) : null
+  const mg = repo?.merge
+  return mg ? (mg.conflicts.find((f) => !mg.markerFree.includes(f)) ?? null) : null
 }
 
 let patchRows: ReturnType<typeof sideBySide> | null = null
@@ -184,7 +186,7 @@ async function resolve(h: ConflictHunk, choice: ConflictChoice): Promise<void> {
     }
     if (selected !== shown.path) return
     conflict = r
-    if (r.markerFree) message = { tone: 'ok', text: 'Keine Marker mehr in dieser Datei. Als gelöst markieren?' }
+    if (r.markerFree) message = { tone: 'ok', text: m.noMarkersLeftAsk }
     render()
   })
 }
@@ -193,7 +195,7 @@ async function markResolved(): Promise<void> {
   if (!selected || busy) return
   const ok = await call(() => orca.plugin.request('conflict.markResolved', { ...ws(), path: selected! }))
   if (!ok) return
-  message = { tone: 'ok', text: `${selected} ist gelöst.` }
+  message = { tone: 'ok', text: m.fileResolved(selected) }
   selected = null
   await reload()
 }
@@ -202,7 +204,7 @@ async function takeFile(side: 'ours' | 'theirs'): Promise<void> {
   if (!selected || busy) return
   const ok = await call(() => orca.plugin.request('conflict.takeFile', { ...ws(), path: selected!, side }))
   if (!ok) return
-  message = { tone: 'ok', text: `${selected}: ${side === 'ours' ? 'dein Stand' : 'eingehende Fassung'} übernommen.` }
+  message = { tone: 'ok', text: side === 'ours' ? m.tookOurs(selected) : m.tookTheirs(selected) }
   selected = null
   await reload()
 }
@@ -214,7 +216,7 @@ async function sendNote(note: string, path: string | undefined): Promise<boolean
   sentNotes.push({ path: path ?? null, text: note, sent: true })
   message = {
     tone: 'ok',
-    text: r.how === 'sent' ? 'An den laufenden Agenten geschickt.' : r.how === 'resumed' ? 'Session fortgesetzt, Anmerkung folgt, sobald der Agent bereit ist.' : 'Neuen Agenten mit der Anmerkung gestartet.'
+    text: r.how === 'sent' ? m.noteSent : r.how === 'resumed' ? m.noteResumed : m.noteStartedAgent
   }
   render()
   return true
@@ -239,9 +241,9 @@ function header(): HTMLElement {
     el('div', { class: 'title' }, title),
     badge(),
     el('div', { class: 'spacer' }),
-    loading ? el('span', { class: 'muted' }, 'lädt …') : null,
-    cmp && !repo?.merge && orca.files ? button('Als Markdown speichern', exportReview, 'plain', 'Vergleich, Commits, Dateien und Anmerkungen, z. B. für einen PR-Text') : null,
-    button('Neu laden', () => void reload())
+    loading ? el('span', { class: 'muted' }, m.loading) : null,
+    cmp && !repo?.merge && orca.files ? button(m.exportMarkdown, exportReview, 'plain', m.exportMarkdownTip) : null,
+    button(m.reload, () => void reload())
   )
 }
 
@@ -258,7 +260,7 @@ function exportReview(): void {
     .saveAs({ suggestedName: name, mimeType: 'text/markdown', data: md })
     .then((r) => {
       if (r.status === 'saved') {
-        message = { tone: 'ok', text: 'Review als Markdown gespeichert.' }
+        message = { tone: 'ok', text: m.reviewSaved }
         render()
       }
     })
@@ -272,22 +274,22 @@ function badge(): HTMLElement | null {
   if (repo?.merge) {
     const open = repo.merge.conflicts.length - repo.merge.markerFree.length
     return open
-      ? el('span', { class: 'badge warn' }, `${open} offen`)
-      : el('span', { class: 'badge ok' }, 'bereit zum Abschließen')
+      ? el('span', { class: 'badge warn' }, m.openCount(open))
+      : el('span', { class: 'badge ok' }, m.readyToFinish)
   }
   if (!cmp) return null
   const p = cmp.preview
-  if (p.upToDate) return el('span', { class: 'badge' }, 'schon enthalten')
-  if (p.fastForward) return el('span', { class: 'badge ok' }, 'Fast-forward')
-  if (p.clean === false) return el('span', { class: 'badge warn' }, `${p.conflicts.length} Konflikt-Datei(en) erwartet`)
-  if (p.clean) return el('span', { class: 'badge ok' }, 'konfliktfrei')
+  if (p.upToDate) return el('span', { class: 'badge' }, m.alreadyIncluded)
+  if (p.fastForward) return el('span', { class: 'badge ok' }, m.fastForward)
+  if (p.clean === false) return el('span', { class: 'badge warn' }, m.conflictFilesExpected(p.conflicts.length))
+  if (p.clean) return el('span', { class: 'badge ok' }, m.conflictFree)
   return null
 }
 
 function body(): HTMLElement {
   if (repo?.problem) return el('main', { class: 'empty' }, repo.problem)
-  // A first load that failed shows why (the header keeps "Neu laden").
-  if (!repo) return el('main', { class: 'empty' }, loading ? 'Lade …' : (message?.text ?? 'Keine Daten.'))
+  // A first load that failed shows why (the header keeps "Reload").
+  if (!repo) return el('main', { class: 'empty' }, loading ? m.loadingBody : (message?.text ?? m.noData))
   return el('main', { class: 'split' }, sidebar(), el('section', { class: 'content' }, notice(), content()))
 }
 
@@ -324,37 +326,37 @@ function sidebar(): HTMLElement {
 
 function buildSidebar(items: Map<string, HTMLElement>): HTMLElement {
   const list = el('nav', { class: 'files' })
-  const showMore = (total: number, what: string) => {
+  const showMore = (total: number, label: (next: number, rest: number) => string) => {
     if (total > listLimit) {
-      list.append(more(`Weitere ${Math.min(LIST_PAGE, total - listLimit)} von ${total - listLimit} ${what} zeigen`, () => {
+      list.append(more(label(Math.min(LIST_PAGE, total - listLimit), total - listLimit), () => {
         listLimit += LIST_PAGE
         render()
       }))
     }
   }
   if (repo?.merge) {
-    const m = repo.merge
-    const ready = new Set(m.markerFree)
-    list.append(el('div', { class: 'group' }, `Konflikte (${m.conflicts.length})`))
-    for (const f of m.conflicts.slice(0, listLimit)) {
+    const mg = repo.merge
+    const ready = new Set(mg.markerFree)
+    list.append(el('div', { class: 'group' }, m.conflictsGroup(mg.conflicts.length)))
+    for (const f of mg.conflicts.slice(0, listLimit)) {
       list.append(fileItem(items, f, ready.has(f) ? '✓' : '⚠', ready.has(f) ? 'ok' : 'warn'))
     }
-    showMore(m.conflicts.length, 'Konflikten')
-    if (!m.conflicts.length) list.append(el('div', { class: 'muted pad' }, 'Alle gelöst. Abschließen im Panel oder mit „Merge & Review: Merge abschließen“.'))
+    showMore(mg.conflicts.length, m.showMoreConflicts)
+    if (!mg.conflicts.length) list.append(el('div', { class: 'muted pad' }, m.allResolved))
     return list
   }
   if (!cmp) {
-    list.append(el('div', { class: 'muted pad' }, 'Quelle im Panel wählen.'))
+    list.append(el('div', { class: 'muted pad' }, m.pickSource))
     return list
   }
   const expected = new Set(cmp.preview.conflicts)
-  list.append(el('div', { class: 'group' }, `Dateien (${cmp.files.length})`))
+  list.append(el('div', { class: 'group' }, m.filesGroup(cmp.files.length)))
   for (const f of cmp.files.slice(0, listLimit)) {
-    const delta = f.added === null ? 'bin' : `+${f.added} −${f.deleted}`
+    const delta = f.added === null ? m.binaryDelta : `+${f.added} −${f.deleted}`
     list.append(fileItem(items, f.path, f.status, expected.has(f.path) ? 'warn' : '', delta))
   }
-  showMore(cmp.files.length, 'Dateien')
-  list.append(el('div', { class: 'group' }, `Commits (${cmp.ahead})`))
+  showMore(cmp.files.length, m.showMoreFiles)
+  list.append(el('div', { class: 'group' }, m.commitsGroup(cmp.ahead)))
   for (const c of cmp.incoming.slice(0, 100)) {
     list.append(el('div', { class: 'commit', title: `${c.author} · ${new Date(c.at).toLocaleString()}` }, el('code', {}, c.short), text(' ' + c.subject)))
   }
@@ -374,9 +376,9 @@ function fileItem(items: Map<string, HTMLElement>, path: string, mark: string, t
 }
 
 function content(): HTMLElement | null {
-  if (repo?.merge) return conflict ? conflictView(conflict) : el('div', { class: 'empty' }, 'Datei links wählen.')
-  if (!cmp) return el('div', { class: 'empty' }, 'Im Panel eine Quelle wählen; der Tab folgt.')
-  if (!selected) return el('div', { class: 'empty' }, 'Keine Änderungen.')
+  if (repo?.merge) return conflict ? conflictView(conflict) : el('div', { class: 'empty' }, m.pickFile)
+  if (!cmp) return el('div', { class: 'empty' }, m.pickSourceInPanel)
+  if (!selected) return el('div', { class: 'empty' }, m.noChanges)
   return diffView()
 }
 
@@ -391,9 +393,9 @@ function diffView(): HTMLElement {
   const key = [patchRows, selected, rowLimit, isWorkspace, patchTruncated]
   if (patchRows && diffCache && sameKey(diffCache.key, key)) return diffCache.node
   const box = el('div', { class: 'diff' })
-  box.append(el('div', { class: 'filehead' }, el('strong', {}, selected!), patchTruncated ? el('span', { class: 'muted' }, ' (gekürzt)') : null))
+  box.append(el('div', { class: 'filehead' }, el('strong', {}, selected!), patchTruncated ? el('span', { class: 'muted' }, m.truncated) : null))
   if (!patchRows) {
-    box.append(el('div', { class: 'muted pad' }, 'lädt …'))
+    box.append(el('div', { class: 'muted pad' }, m.loading))
     return box
   }
   const table = el('table', { class: 'sbs' })
@@ -410,9 +412,9 @@ function diffView(): HTMLElement {
     const lineNo = (n: number | null) =>
       el('td', {
         class: 'no',
-        title: n ? 'Klicken: Anmerkung zu dieser Zeile' : '',
+        title: n ? m.lineNoTip : '',
         onclick: () => {
-          if (noteField && n) noteField.prefill(`Zeile ${n}: `)
+          if (noteField && n) noteField.prefill(m.linePrefix(n))
         }
       }, n === null ? '' : String(n))
     table.append(
@@ -428,7 +430,7 @@ function diffView(): HTMLElement {
   }
   box.append(table)
   if (shown > rowLimit) {
-    box.append(more(`Weitere ${Math.min(ROWS_PAGE, shown - rowLimit)} von ${shown - rowLimit} Zeilen zeigen`, () => {
+    box.append(more(m.showMoreRows(Math.min(ROWS_PAGE, shown - rowLimit), shown - rowLimit), () => {
       rowLimit += ROWS_PAGE
       render()
     }))
@@ -442,8 +444,8 @@ function noteBox(path: string, toAgent: boolean): { node: HTMLElement; prefill: 
   const area = el('textarea', {
     rows: '3',
     placeholder: toAgent
-      ? 'Anmerkung an den Agenten der Quelle … (Klick auf eine Zeilennummer fügt sie ein)'
-      : 'Review-Notiz zu dieser Datei … (Klick auf eine Zeilennummer fügt sie ein; „Als Markdown speichern“ nimmt sie mit)',
+      ? m.notePlaceholderAgent
+      : m.notePlaceholderReview,
     oninput: () => drafts.set(path, area.value)
   })
   area.value = drafts.get(path) ?? '' // the draft survives switching files and re-renders
@@ -452,7 +454,7 @@ function noteBox(path: string, toAgent: boolean): { node: HTMLElement; prefill: 
     { class: 'note' },
     area,
     toAgent
-      ? el('div', { class: 'row' }, button('An Agent senden', async () => {
+      ? el('div', { class: 'row' }, button(m.sendToAgent, async () => {
           if (area.value.trim() && (await sendNote(area.value, path))) {
             area.value = ''
             drafts.delete(path)
@@ -474,29 +476,29 @@ function noteBox(path: string, toAgent: boolean): { node: HTMLElement; prefill: 
 function conflictView(file: ConflictFile): HTMLElement {
   const box = el('div', { class: 'conflict' })
   const ours = repo?.branch ?? 'HEAD'
-  const theirs = repo?.merge?.source ?? 'eingehend'
+  const theirs = repo?.merge?.source ?? m.incomingFallback
   box.append(
     el(
       'div',
       { class: 'filehead' },
       el('strong', {}, file.path),
       el('div', { class: 'spacer' }),
-      button('Im Editor bearbeiten', () => void call(() => orca.plugin.request('conflict.openInEditor', { ...ws(), path: file.path }))),
-      button(`Ganze Datei: ${ours}`, () => void takeFile('ours')),
-      button(`Ganze Datei: ${theirs}`, () => void takeFile('theirs')),
-      button('Als gelöst markieren', () => void markResolved(), file.markerFree ? 'primary' : 'plain', file.markerFree ? '' : 'Erst alle Blöcke auflösen')
+      button(m.editInEditor, () => void call(() => orca.plugin.request('conflict.openInEditor', { ...ws(), path: file.path }))),
+      button(m.wholeFile(ours), () => void takeFile('ours')),
+      button(m.wholeFile(theirs), () => void takeFile('theirs')),
+      button(m.markResolved, () => void markResolved(), file.markerFree ? 'primary' : 'plain', file.markerFree ? '' : m.markResolvedTip)
     )
   )
   if (file.wholeFileOnly) {
     box.append(
       el('div', { class: 'notice warn' },
-        !file.stage.ours ? `Auf ${ours} gelöscht, auf ${theirs} geändert.` : !file.stage.theirs ? `Auf ${theirs} gelöscht, auf ${ours} geändert.` : 'Binärdatei: nur eine ganze Seite übernehmen.'
+        !file.stage.ours ? m.deletedOnChangedOn(ours, theirs) : !file.stage.theirs ? m.deletedOnChangedOn(theirs, ours) : m.binaryWholeSide
       )
     )
     return box
   }
   if (!file.hunks.length) {
-    box.append(el('div', { class: 'notice ok' }, 'Keine Konfliktmarker mehr. Prüfen und als gelöst markieren.'))
+    box.append(el('div', { class: 'notice ok' }, m.noMarkersLeftReview))
     return box
   }
   file.hunks.forEach((h) => box.append(hunkCard(h, file.hunks.length, ours, theirs)))
@@ -505,31 +507,31 @@ function conflictView(file: ConflictFile): HTMLElement {
 
 function hunkCard(h: ConflictHunk, total: number, ours: string, theirs: string): HTMLElement {
   const side = (label: string, body: string, cls: string) =>
-    el('div', { class: `side ${cls}` }, el('div', { class: 'label' }, label), el('pre', {}, body || '(leer)'))
+    el('div', { class: `side ${cls}` }, el('div', { class: 'label' }, label), el('pre', {}, body || m.emptySide))
   return el(
     'div',
     { class: 'hunk-card' },
-    el('div', { class: 'hunk-title' }, `Konflikt ${h.index + 1} von ${total}`),
+    el('div', { class: 'hunk-title' }, m.conflictOf(h.index + 1, total)),
     el(
       'div',
       { class: `sides ${h.base !== null ? 'three' : ''}` },
-      side(`Dein Stand (${ours})`, h.ours, 'ours'),
-      h.base !== null ? side('Gemeinsame Basis', h.base, 'base') : null,
-      side(`Eingehend (${theirs})`, h.theirs, 'theirs')
+      side(m.yourSide(ours), h.ours, 'ours'),
+      h.base !== null ? side(m.commonBase, h.base, 'base') : null,
+      side(m.incomingSide(theirs), h.theirs, 'theirs')
     ),
     el(
       'div',
       { class: 'row' },
-      button('Meins (1)', () => void resolve(h, 'ours')),
-      button('Eingehend (2)', () => void resolve(h, 'theirs')),
-      button('Beide (3)', () => void resolve(h, 'both')),
-      h.base !== null ? button('Basis', () => void resolve(h, 'base')) : null
+      button(m.mine, () => void resolve(h, 'ours')),
+      button(m.incoming, () => void resolve(h, 'theirs')),
+      button(m.both, () => void resolve(h, 'both')),
+      h.base !== null ? button(m.base, () => void resolve(h, 'base')) : null
     )
   )
 }
 
 function footer(): HTMLElement {
-  return el('footer', { class: 'muted small' }, `Merge & Review ${VERSION} · Tasten: 1 Meins · 2 Eingehend · 3 Beide (erster offener Block) · n nächste Datei`)
+  return el('footer', { class: 'muted small' }, m.keysHelp(VERSION))
 }
 
 // ------------------------------------------------------------------ keys
@@ -568,6 +570,7 @@ function applyTypography(t: Typography): void {
 }
 
 async function start(): Promise<void> {
+  setLocale(localeOf(orca.locale))
   document.head.append(el('style', {}, STYLES))
   if (orca.host.has('editor.readTypography')) {
     orca.host.call('editor.readTypography').then(applyTypography).catch(() => {})
@@ -590,7 +593,7 @@ async function start(): Promise<void> {
   const apply = (t: ReviewTicket | null) => {
     ticket = t
     selected = t && t.view !== 'overview' ? t.path : null
-    message = t ? null : { tone: 'err', text: 'Diese Datei ist kein gültiger Merge-&-Review-Verweis.' }
+    message = t ? null : { tone: 'err', text: m.invalidTicket }
     void reload()
   }
   doc.onReplace(apply)

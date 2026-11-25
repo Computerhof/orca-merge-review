@@ -6,6 +6,8 @@
 // command, while `git -C . reset --hard`, `/usr/bin/git`, `git.exe` and `bash -c "…"` are.
 // A guard rail, not a security boundary: a determined process can still get around it.
 
+import { m } from './messages.ts'
+
 /** The command text of a shell-like tool call, whatever shape the agent uses; null otherwise. */
 export function commandOf(input: unknown): string | null {
   if (typeof input === 'string') return input
@@ -146,31 +148,31 @@ function duringMerge({ sub, args }: GitCall): string | null {
   if (args.includes('--help') || args.includes('-h')) return null
   switch (sub) {
     case 'reset':
-      if (hasFlag(args, ['--hard'])) return 'git reset --hard verwirft den Merge und alle Auflösungen'
-      if (hasFlag(args, ['--merge', '--keep'])) return 'git reset --merge bricht den Merge ab'
+      if (hasFlag(args, ['--hard'])) return m.guardResetHard
+      if (hasFlag(args, ['--merge', '--keep'])) return m.guardResetMerge
       return null
     case 'merge':
-      if (hasFlag(args, ['--abort', '--quit'])) return 'git merge --abort bricht den Merge ab'
+      if (hasFlag(args, ['--abort', '--quit'])) return m.guardMergeAbort
       return null
     case 'checkout':
-      if (hasFlag(args, ['--force'], 'f')) return 'git checkout --force verwirft Auflösungen'
-      if (paths.some((p) => WHOLE_TREE.has(p))) return 'Zurücksetzen des ganzen Arbeitsbaums verwirft Auflösungen'
-      if (hasFlag(args, ['-b', '-B', '--orphan', '--detach'])) return 'Branch-Wechsel mitten im Merge'
-      if (sep < 0 && plain.length === 1 && !options.some((o) => RESOLVING.includes(o))) return 'Branch-Wechsel mitten im Merge'
+      if (hasFlag(args, ['--force'], 'f')) return m.guardCheckoutForce
+      if (paths.some((p) => WHOLE_TREE.has(p))) return m.guardWholeTree
+      if (hasFlag(args, ['-b', '-B', '--orphan', '--detach'])) return m.guardSwitchBranch
+      if (sep < 0 && plain.length === 1 && !options.some((o) => RESOLVING.includes(o))) return m.guardSwitchBranch
       return null
     case 'restore':
-      if (paths.some((p) => WHOLE_TREE.has(p))) return 'Zurücksetzen des ganzen Arbeitsbaums verwirft Auflösungen'
+      if (paths.some((p) => WHOLE_TREE.has(p))) return m.guardWholeTree
       return null
     case 'switch':
-      return 'Branch-Wechsel mitten im Merge'
+      return m.guardSwitchBranch
     case 'clean':
-      if (hasFlag(args, ['--force'], 'f')) return 'git clean -f löscht Dateien'
+      if (hasFlag(args, ['--force'], 'f')) return m.guardCleanForce
       return null
     case 'stash':
       if (plain[0] === 'list' || plain[0] === 'show') return null
-      return 'git stash während eines Merges verliert den Merge-Zustand'
+      return m.guardStash
     case 'rebase':
-      return 'Rebase mitten im Merge'
+      return m.guardRebase
     default:
       return null
   }
@@ -180,7 +182,7 @@ function always({ sub, args }: GitCall): string | null {
   if (sub !== 'push') return null
   const lease = hasFlag(args, ['--force-with-lease'])
   const force = hasFlag(args, ['--force'], 'f') || args.some((a) => !a.startsWith('-') && a.startsWith('+'))
-  if (force && (!lease || hasFlag(args, ['--force']))) return 'Force-Push überschreibt fremde Arbeit'
+  if (force && (!lease || hasFlag(args, ['--force']))) return m.guardForcePush
   return null
 }
 
@@ -194,9 +196,7 @@ export function guardDecision(command: string, ctx: GuardContext): string | null
   for (const call of gitCalls(command)) {
     const why = always(call) ?? (ctx.merging ? duringMerge(call) : null)
     if (why) {
-      return `Merge & Review hat diesen Befehl blockiert: ${why}.${
-        ctx.merging ? ' Es läuft ein Merge; der Mensch schließt ihn im Merge-&-Review-Panel ab oder bricht ihn dort ab.' : ''
-      }`
+      return m.guardBlocked(why, ctx.merging)
     }
   }
   return null

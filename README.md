@@ -6,7 +6,9 @@ Konflikte **Block für Block in einem breiten Tab auflösen** und Reviews oder K
 
 > *English:* An Orca plugin to review branches and agent workspaces before merging, predict conflicts
 > with `git merge-tree`, merge, resolve conflicts block by block in a wide tab, and hand review notes
-> or conflicts to Orca agents. The UI is German for now.
+> or conflicts to Orca agents. The UI follows Orca's language: German or English (everything else
+> falls back to English). Command and setting names in Orca's palette and settings stay German, as Orca
+> cannot translate a plugin manifest yet.
 
 Version: siehe `orca-plugin.json` (wird unten im Panel und im Tab angezeigt) · Änderungen: [CHANGELOG.md](CHANGELOG.md)
 

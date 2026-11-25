@@ -4,6 +4,7 @@ import { Repo, UserError } from '../core/repo.ts'
 import { localFiles } from '../git/files.ts'
 import type { GitRunner } from '../git/runner.ts'
 import type { AgentActivity, SourceOption, WorkspaceInfo } from '../types.ts'
+import { m } from './messages.ts'
 
 type Row = {
   id: string
@@ -84,17 +85,17 @@ export class Workspaces {
   /** The named workspace, else the focused one. Throws a UserError the panel can show. */
   async resolve(workspaceId?: string): Promise<Resolved> {
     const id = workspaceId ?? (await this.focusedId())
-    if (!id) throw new UserError('Kein Workspace geöffnet.')
+    if (!id) throw new UserError(m.noWorkspaceOpen)
     let row = (await this.list()).find((w) => w.id === id)
     if (!row) row = (await this.list(true)).find((w) => w.id === id)
-    if (!row) throw new UserError('Dieser Workspace ist Orca nicht (mehr) bekannt.')
+    if (!row) throw new UserError(m.unknownWorkspace)
     const supported = row.hostId === 'local' || row.hostId === null
     const info: WorkspaceInfo = { id: row.id, name: row.name, path: row.path, supported, hostId: row.hostId }
     if (!supported) {
-      throw new UserError('Dieser Workspace liegt auf einem entfernten Host. Merge & Review arbeitet in v0.1 nur lokal.')
+      throw new UserError(m.remoteWorkspace)
     }
     const repo = await Repo.open(this.runner, localFiles, row.path)
-    if (!repo) throw new UserError(`„${row.name}“ ist kein Git-Repository.`)
+    if (!repo) throw new UserError(m.notAGitRepo(row.name))
     return { info, row, repo }
   }
 

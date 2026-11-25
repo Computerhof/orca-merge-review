@@ -40,6 +40,8 @@ declare module 'orca' {
     'stash.restore': { input: Ws; output: { result: 'restored' | 'missing' | 'conflict' } }
     /** Shows Orca's source control sidebar (to commit uncommitted changes). */
     'ui.sourceControl': { input: Ws; output: { ok: true } }
+    /** The panel reports Orca's UI language; the worker uses it for its own texts and remembers it. */
+    'ui.locale': { input: { locale: string }; output: { locale: 'de' | 'en' } }
     /** git merge --abort (or reset --merge after a squash). */
     'merge.abort': { input: Ws; output: { ok: true } }
     /** Concludes the ongoing merge with a commit once nothing is unmerged. */
