@@ -5,6 +5,7 @@
 // (`npm test`, `pnpm -w test && cargo test`), exactly as they would type it. Nothing from Git
 // or from an agent is ever spliced into it.
 import { spawn } from 'node:child_process'
+import { m } from '../core/messages.ts'
 
 export interface CommandResult {
   /** Null when the process was killed (timeout or cancel) or could not start. */
@@ -83,7 +84,7 @@ export function runCommand(command: string, cwd: string, options: CommandOptions
       while (tail.length > keep) tail.shift()
       resolve({ exitCode, timedOut, cancelled, tail, durationMs: Date.now() - started })
     }
-    child.on('error', (error) => finish(null, `Konnte nicht starten: ${error.message}`))
+    child.on('error', (error) => finish(null, m.commandNotStarted(error.message)))
     child.on('close', (code) => finish(timedOut || cancelled ? null : code))
   })
 }

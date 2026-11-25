@@ -1,5 +1,7 @@
 // The texts the plugin hands to agents. Pure functions, so they are tested and reviewed like code.
 // Agents read these as instructions: keep them short, concrete and free of anything secret.
+// The wording lives in messages.ts, in the plugin's current language.
+import { m } from './messages.ts'
 
 export function reviewFeedbackPrompt(input: {
   target: string
@@ -8,13 +10,7 @@ export function reviewFeedbackPrompt(input: {
   note: string
 }): string {
   const where = input.path ? ` in \`${input.path}\`` : ''
-  return [
-    `Review-Anmerkung aus Merge & Review (${input.source} → ${input.target})${where}:`,
-    '',
-    input.note.trim(),
-    '',
-    'Bitte umsetzen und committen. Kein Merge, kein Rebase, kein Push.'
-  ].join('\n')
+  return [m.feedbackHead(input.source, input.target, where), '', input.note.trim(), '', m.feedbackTail].join('\n')
 }
 
 export function resolveConflictsPrompt(input: {
@@ -23,31 +19,15 @@ export function resolveConflictsPrompt(input: {
   files: readonly string[]
 }): string {
   return [
-    `In diesem Workspace läuft ein Merge von \`${input.source}\` in \`${input.target}\` mit Konflikten in:`,
+    m.resolveIntro(input.source, input.target),
     ...input.files.map((f) => `- ${f}`),
     '',
-    'Aufgabe: Löse jeden Konflikt so auf, dass beide Absichten erhalten bleiben. Lies dazu die',
-    'Commits beider Seiten (`git log --merge`, `git diff`). Prüfe danach mit den Tests des Projekts.',
-    '',
-    'Regeln:',
-    '- Entferne alle Konfliktmarker; markiere gelöste Dateien mit `git add <datei>`.',
-    '- Committe NICHT, brich den Merge NICHT ab, kein reset/stash/checkout des ganzen Baums.',
-    '- Schreibe am Ende eine kurze Zusammenfassung pro Datei: was du wie entschieden hast.',
-    'Der Mensch prüft deine Auflösung in Merge & Review und schließt den Merge selbst ab.'
+    m.resolveTask
   ].join('\n')
 }
 
 export function mergeWatchPrompt(input: { base: string }): string {
-  return [
-    `Merge-Wächter (Merge & Review): Prüfe, ob sich \`${input.base}\` noch sauber in diesen Branch mergen lässt.`,
-    '',
-    `1. \`git fetch --quiet\` (falls ein Remote existiert).`,
-    `2. \`git merge-tree --write-tree --name-only HEAD ${input.base}\` (bzw. den Remote-Branch, falls neuer).`,
-    '3. Exit 0: antworte nur „sauber“ mit der Zahl neuer Commits auf der Base.',
-    '   Exit 1: nenne die betroffenen Dateien und je in einem Satz, welche Commits kollidieren.',
-    '',
-    'Ändere nichts: kein Merge, kein Commit, kein Checkout, kein Push.'
-  ].join('\n')
+  return m.watchLines(input.base)
 }
 
 /** K11: tests went red after a merge; the agent finds and fixes the cause on top of the merge. */
@@ -58,18 +38,16 @@ export function testFixPrompt(input: {
   exitCode: number | null
   tail: readonly string[]
 }): string {
-  const what = input.source ? `Nach dem Merge von \`${input.source}\` in \`${input.target}\`` : `Auf \`${input.target}\``
+  const what = input.source ? m.testFixAfterMerge(input.source, input.target) : m.testFixOn(input.target)
   return [
-    `${what} schlagen die Tests fehl (Merge & Review): \`${input.command}\` endete mit Exit ${input.exitCode ?? '?'}.`,
+    m.testFixHead(what, input.command, input.exitCode ?? '?'),
     '',
-    'Letzte Ausgabe:',
+    m.testFixOutput,
     '```',
     ...input.tail.slice(-40),
     '```',
     '',
-    'Aufgabe: Finde die Ursache und behebe sie, bis der Befehl grün ist. Committe die Korrektur als',
-    'eigenen Commit mit einer kurzen Begründung.',
-    'Regeln: Den Merge nicht rückgängig machen (kein reset, kein revert), kein Push, keine Tests abschalten.'
+    m.testFixTask
   ].join('\n')
 }
 
@@ -81,10 +59,5 @@ export const MERGE_HINT_TAG = '[Merge & Review]'
  * One line on purpose: a prompt typed into a running agent's TUI is submitted on Enter.
  */
 export function mergeHintPrompt(input: { source: string; open: number }): string {
-  const open = input.open ? `${input.open} Datei(en) haben noch Konflikte. ` : ''
-  return (
-    `${MERGE_HINT_TAG} In diesem Workspace läuft ein Merge von \`${input.source}\`. ${open}` +
-    'Merge nicht abbrechen, nicht committen, kein reset/stash/checkout des ganzen Baums; ' +
-    'gelöste Dateien nur mit `git add` markieren. Der Mensch schließt den Merge in Merge & Review ab.'
-  )
+  return m.hint(MERGE_HINT_TAG, input.source, input.open ? m.hintOpen(input.open) : '')
 }

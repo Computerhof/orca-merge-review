@@ -6,6 +6,9 @@ orca-plugin.json        Manifest: Panel, Custom Editor, Befehle, Tastenkürzel, 
 src/
   types.ts              Reine Datentypen (kein Orca-Import): Kern, Worker, Panel, Tab
   protocol.ts           Vertrag Panel/Tab ↔ Worker (Requests, Events) per declare module 'orca'
+  i18n/index.ts         Sprache (de/en): localeOf, setLocale, messages({ de, en }) – en ist gegen de typgeprüft
+  panel.messages.ts     Texte des Panels · editor/messages.ts des Tabs · worker/messages.ts des Workers
+                        core/messages.ts des Kerns (Ablehnungen, Agenten-Prompts, Export, Wächter-Gründe)
   core/                 ── kennt Orca nicht; läuft in CI mit reinem Node ──
     repo.ts             Git-Operationen: Zustand, Vergleich, merge-tree-Vorschau, Merge,
                         Abbruch, Abschluss, Undo, Konflikte (über GitRunner + FileAccess)
@@ -61,3 +64,14 @@ scripts/check-private.mjs  Privacy-/Secret-Guard (Hook + CI)
 Git läuft hinter `GitRunner`, Dateien hinter `FileAccess`. Eine Anbindung für SSH-Hosts wäre eine neue
 Implementierung beider Schnittstellen. `Workspaces.resolve()` wählt sie anhand von `hostId`; Kern und Panel
 bleiben unverändert.
+
+## Sprache (seit 0.4.0)
+
+Panel und Tab lesen Orcas UI-Sprache (`env.locale`, `orca.locale`); Deutsch bleibt Deutsch, alles andere wird
+Englisch. Der Worker kennt die UI-Sprache nicht: Das Panel meldet sie mit `ui.locale`, der Worker merkt sie sich im
+Plugin-Speicher und nutzt sie für Statusleiste, Meldungen, Ablehnungen, Agenten-Prompts und den Export, auch nach
+einem Neustart. Texte stehen in einem Katalog pro Bereich (`messages({ de, en })`); fehlt eine Übersetzung oder
+weicht ihre Parameterliste ab, schlägt der Typecheck fehl. Kataloge werden beim Lesen ausgewertet, nie in
+Modul-Konstanten kopiert (sonst bliebe die Sprache stehen). Das Manifest (Befehls-, Einstellungs- und Paneltitel)
+bleibt deutsch, weil Orca Manifeste nicht übersetzt. Ein Merge-Wächter wird an beiden Präfixen erkannt
+(„Merge-Wächter: “, „Merge watch: “).

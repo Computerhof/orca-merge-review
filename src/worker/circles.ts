@@ -7,6 +7,7 @@ import { countConflicts } from '../core/conflicts.ts'
 import { MERGE_HINT_TAG, mergeHintPrompt } from '../core/prompts.ts'
 import { relativeTo, UserError } from '../core/repo.ts'
 import { mergeMarkersSync } from '../git/mergeMarkers.ts'
+import { m } from './messages.ts'
 import type { Monitor } from './monitor.ts'
 import type { SettingsCache } from './settings.ts'
 import type { Resolved, Workspaces } from './workspaces.ts'
@@ -74,7 +75,7 @@ export async function promptHint(deps: CircleDeps, e: PromptEvent): Promise<stri
 /** Focuses the agent working on `source` (its workspace), else opens that workspace. */
 export async function focusAgent(deps: CircleDeps, ws: Resolved, source: string): Promise<'terminal' | 'workspace'> {
   const row = await deps.workspaces.workspaceOfBranch(ws, source)
-  if (!row) throw new UserError(`Zu „${source}“ gibt es keinen Orca-Workspace.`)
+  if (!row) throw new UserError(m.noWorkspaceForBranch(source))
   try {
     const { agents } = await deps.orca.host.call('agents.list', { workspaceId: row.id })
     const agent = agents.find((a) => a.terminalId && a.state !== 'done') ?? agents.find((a) => a.terminalId)

@@ -4,6 +4,7 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 import { mergeMarkersSync } from '../git/mergeMarkers.ts'
 import type { JobState } from '../types.ts'
+import { m } from './messages.ts'
 import type { Workspaces } from './workspaces.ts'
 
 export interface MergeSnapshot {
@@ -119,14 +120,14 @@ export class Monitor {
   /** No merge running: the status bar shows a running or failed test / probe job, else nothing. */
   private async paintJob(): Promise<void> {
     const job = this.focused ? this.jobOf(this.focused) : null
-    const what = job?.kind === 'probe' ? 'Probe-Merge' : 'Tests'
+    const probe = job?.kind === 'probe'
     if (job?.status === 'running') {
       await this.orca.host.call('statusBar.update', {
         id: 'merge',
         visible: true,
         icon: 'activity',
         tone: 'accent',
-        text: job.kind === 'probe' ? 'Probe-Merge läuft …' : 'Tests laufen …',
+        text: probe ? m.statusProbeRunning : m.statusTestsRunning,
         tooltip: job.message
       })
     } else if (job && (job.status === 'failed' || job.status === 'error' || job.status === 'conflicts')) {
@@ -135,8 +136,17 @@ export class Monitor {
         visible: true,
         icon: 'error',
         tone: 'danger',
-        text: job.status === 'conflicts' ? 'Probe-Merge: Konflikte' : job.status === 'error' ? `${what}: Fehler` : `${what}: rot`,
-        tooltip: `${job.message} Details im Panel Merge & Review.`
+        text:
+          job.status === 'conflicts'
+            ? m.statusProbeConflicts
+            : job.status === 'error'
+              ? probe
+                ? m.statusProbeError
+                : m.statusTestsError
+              : probe
+                ? m.statusProbeRed
+                : m.statusTestsRed,
+        tooltip: m.statusJobTooltip(job.message)
       })
     } else {
       await this.orca.host.call('statusBar.update', { id: 'merge', visible: false })
@@ -155,10 +165,8 @@ export class Monitor {
         visible: true,
         icon: ready ? 'check' : 'warning',
         tone: ready ? 'accent' : 'warning',
-        text: ready
-          ? 'Merge bereit zum Abschließen'
-          : `Merge: ${snap.open} ${snap.open === 1 ? 'Konflikt' : 'Konflikte'} offen`,
-        tooltip: `Merge von ${snap.source ?? '?'} läuft. Klicken öffnet Merge & Review.`
+        text: ready ? m.statusMergeReady : m.statusConflictsOpen(snap.open),
+        tooltip: m.statusMergeTooltip(snap.source ?? '?')
       })
     } catch (error) {
       this.orca.log(`status bar: ${(error as Error).message}`)

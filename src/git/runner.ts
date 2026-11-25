@@ -1,6 +1,7 @@
 // The one seam between the plugin and Git. Everything else talks to `GitRunner`, never to a
 // process API, so another transport (an SSH host, a test double) is a new implementation.
 import { execFile } from 'node:child_process'
+import { m } from '../core/messages.ts'
 
 export interface GitResult {
   /** Process exit code; 0 is success. Some commands (merge-tree, merge) use 1 for "conflicts". */
@@ -52,10 +53,10 @@ export class LocalGitRunner implements GitRunner {
             const e = error as NodeJS.ErrnoException & { killed?: boolean }
             const reason =
               e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
-                ? `git ${args[0]}: Ausgabe zu groß (über 32 MB)`
+                ? m.outputTooLarge(args[0])
                 : e.killed
-                  ? `git ${args[0]} hat zu lange gebraucht und wurde abgebrochen`
-                  : `git konnte nicht gestartet werden: ${error.message}`
+                  ? m.tookTooLong(args[0])
+                  : m.gitNotStarted(error.message)
             reject(new Error(reason))
             return
           }
@@ -87,7 +88,7 @@ export async function git(
   const result = await runner.run(cwd, args, options)
   if (!ok.includes(result.code)) {
     const detail = (result.stderr || result.stdout).trim().split('\n').slice(0, 8).join('\n')
-    throw new GitError(`git ${args[0]} fehlgeschlagen (Exit ${result.code}): ${detail}`, result)
+    throw new GitError(m.gitFailed(args[0], result.code, detail), result)
   }
   return result
 }

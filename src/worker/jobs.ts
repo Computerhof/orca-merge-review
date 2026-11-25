@@ -7,6 +7,7 @@ import { runCommand } from '../run/command.ts'
 import { probeMerge } from '../run/probe.ts'
 import type { GitRunner } from '../git/runner.ts'
 import type { JobState } from '../types.ts'
+import { m } from './messages.ts'
 import type { Resolved } from './workspaces.ts'
 
 /** Tests and probes may take long; past this they are stopped. */
@@ -31,8 +32,8 @@ export class Jobs {
 
   /** K11: runs the test command in the workspace itself (after a merge, or on request). */
   runTests(ws: Resolved, source: string | null, command: string | null): void {
-    if (!command) throw new UserError('Für dieses Projekt ist kein Testbefehl festgelegt (Panel: „Tests für dieses Projekt“).')
-    this.start(ws.info.id, { kind: 'tests', source, command, message: `Tests laufen: ${command}` }, async (signal) => {
+    if (!command) throw new UserError(m.noTestCommandSet)
+    this.start(ws.info.id, { kind: 'tests', source, command, message: m.testsRunning(command) }, async (signal) => {
       const r = await runCommand(command, ws.repo.root, { timeoutMs: JOB_TIMEOUT_MS, signal })
       const ok = r.exitCode === 0
       return {
@@ -40,27 +41,26 @@ export class Jobs {
         exitCode: r.exitCode,
         tail: r.tail,
         message: ok
-          ? 'Tests grün.'
+          ? m.testsGreen
           : r.timedOut
-            ? 'Tests nach 15 Minuten abgebrochen.'
+            ? m.testsTimedOut
             : r.cancelled
-              ? 'Tests abgebrochen.'
-              : `Tests rot (Exit ${r.exitCode ?? '?'}).`
+              ? m.testsCancelled
+              : m.testsRed(r.exitCode ?? '?')
       }
     })
   }
 
   /** K12: merges `source` in a temporary worktree (and tests there); the workspace stays as it is. */
   probe(ws: Resolved, source: string, command: string | null): void {
-    const what = command ? 'Probe-Merge mit Tests' : 'Probe-Merge'
-    this.start(ws.info.id, { kind: 'probe', source, command, message: `${what} von ${source} läuft …` }, async (signal) => {
+    this.start(ws.info.id, { kind: 'probe', source, command, message: command ? m.probeRunningWithTests(source) : m.probeRunning(source) }, async (signal) => {
       const r = await probeMerge(this.runner, ws.repo.root, source, { testCommand: command, testTimeoutMs: JOB_TIMEOUT_MS, signal })
       return {
         status: r.status,
         exitCode: r.tests?.exitCode ?? null,
         tail: r.tests?.tail ?? [],
         conflicts: r.conflicts,
-        message: `Probe-Merge von ${source}: ${r.message}`
+        message: m.probeResult(source, r.message)
       }
     })
   }
@@ -70,7 +70,7 @@ export class Jobs {
   }
 
   dismiss(workspaceId: string): void {
-    if (this.running.has(workspaceId)) throw new UserError('Läuft noch. Erst abbrechen.')
+    if (this.running.has(workspaceId)) throw new UserError(m.jobStillRunning)
     this.jobs.delete(workspaceId)
     this.changed(workspaceId)
   }
@@ -84,7 +84,7 @@ export class Jobs {
     init: Pick<JobState, 'kind' | 'source' | 'command' | 'message'>,
     work: (signal: AbortSignal) => Promise<Partial<JobState> & Pick<JobState, 'status' | 'message'>>
   ): void {
-    if (this.running.has(workspaceId)) throw new UserError('Hier läuft schon ein Test oder Probe-Merge.')
+    if (this.running.has(workspaceId)) throw new UserError(m.jobAlreadyRunning)
     const controller = new AbortController()
     this.running.set(workspaceId, controller)
     this.jobs.set(workspaceId, {

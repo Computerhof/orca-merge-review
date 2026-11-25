@@ -2,6 +2,8 @@
 // confirms it in the panel before anything runs. Pure (the caller passes the file listing and a
 // reader), so it is tested in CI.
 
+import { m } from './messages.ts'
+
 export interface ProjectFiles {
   /** File and folder names at the repository's top level. */
   names: readonly string[]
@@ -35,22 +37,22 @@ export async function detectTestCommand(files: ProjectFiles): Promise<TestSugges
     if (name) {
       const pm = has('pnpm-lock.yaml') ? 'pnpm' : has('yarn.lock') ? 'yarn' : has('bun.lockb') || has('bun.lock') ? 'bun' : 'npm'
       const command = name === 'test' && pm !== 'bun' ? `${pm} test` : `${pm} run ${name}`
-      return { command, because: `package.json hat das Skript „${name}“` }
+      return { command, because: m.becausePackageScript(name) }
     }
   }
-  if (has('Cargo.toml')) return { command: 'cargo test', because: 'Rust-Projekt (Cargo.toml)' }
-  if (has('go.mod')) return { command: 'go test ./...', because: 'Go-Modul (go.mod)' }
-  if (has('deno.json') || has('deno.jsonc')) return { command: 'deno test', because: 'Deno-Projekt' }
-  if (has('pytest.ini') || has('conftest.py')) return { command: 'pytest', because: 'pytest-Konfiguration' }
+  if (has('Cargo.toml')) return { command: 'cargo test', because: m.becauseCargo }
+  if (has('go.mod')) return { command: 'go test ./...', because: m.becauseGo }
+  if (has('deno.json') || has('deno.jsonc')) return { command: 'deno test', because: m.becauseDeno }
+  if (has('pytest.ini') || has('conftest.py')) return { command: 'pytest', because: m.becausePytestConfig }
   if (has('pyproject.toml') && /pytest/.test((await files.read('pyproject.toml')) ?? '')) {
-    return { command: 'pytest', because: 'pyproject.toml nennt pytest' }
+    return { command: 'pytest', because: m.becausePyproject }
   }
-  if (files.names.some((n) => /\.(sln|slnx|csproj|fsproj)$/i.test(n))) return { command: 'dotnet test', because: '.NET-Projekt' }
+  if (files.names.some((n) => /\.(sln|slnx|csproj|fsproj)$/i.test(n))) return { command: 'dotnet test', because: m.becauseDotnet }
   if (has('Makefile') && /^test\s*:/m.test((await files.read('Makefile')) ?? '')) {
-    return { command: 'make test', because: 'Makefile hat ein test-Ziel' }
+    return { command: 'make test', because: m.becauseMake }
   }
-  if (has('gradlew') || has('gradlew.bat')) return { command: process.platform === 'win32' ? 'gradlew.bat test' : './gradlew test', because: 'Gradle-Wrapper' }
-  if (has('pom.xml')) return { command: 'mvn test', because: 'Maven-Projekt (pom.xml)' }
+  if (has('gradlew') || has('gradlew.bat')) return { command: process.platform === 'win32' ? 'gradlew.bat test' : './gradlew test', because: m.becauseGradle }
+  if (has('pom.xml')) return { command: 'mvn test', because: m.becauseMaven }
   return null
 }
 

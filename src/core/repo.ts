@@ -13,6 +13,7 @@ import type {
 } from '../types.ts'
 import { git, GitError, LONG_RUNNING_MS, type GitRunner, type RunOptions } from '../git/runner.ts'
 import { conflictsOf, displayLines, parseConflicts, resolveConflict } from './conflicts.ts'
+import { m } from './messages.ts'
 
 export interface FileAccess {
   /** Null when the file does not exist. */
@@ -87,7 +88,7 @@ export class Repo {
     const [unmerged, mergeHead] = await Promise.all([this.unmerged(), this.mergeHead()])
     if (mergeHead === null && unmerged.length === 0 && !(await this.squashPending())) return null
     return {
-      source: mergeHead ? await this.describe(mergeHead) : 'Squash-Merge',
+      source: mergeHead ? await this.describe(mergeHead) : m.squashLabel,
       conflicts: unmerged,
       markerFree: await this.markerFree(unmerged)
     }
@@ -229,13 +230,13 @@ export class Repo {
   async verify(ref: string): Promise<string> {
     const name = ref.trim()
     if (!name || name.startsWith('-') || /[\0\n]/.test(name)) {
-      throw new UserError(`Ungültiger Branch-Name: "${ref}"`)
+      throw new UserError(m.invalidBranchName(ref))
     }
     const r = await this.git(
       ['rev-parse', '--verify', '--quiet', '--end-of-options', `${name}^{commit}`],
       [0, 1, 128]
     )
-    if (r.code !== 0) throw new UserError(`"${name}" ist kein Branch oder Commit in diesem Repository.`)
+    if (r.code !== 0) throw new UserError(m.notBranchOrCommit(name))
     return r.stdout.trim()
   }
 
@@ -344,16 +345,14 @@ export class Repo {
   ): Promise<MergeOutcome> {
     await this.verify(source)
     if ((await this.mergeHead()) || (await this.unmerged()).length) {
-      throw new UserError('Es läuft schon ein Merge. Erst abschließen oder abbrechen.')
+      throw new UserError(m.mergeAlreadyRunning)
     }
     const dirty = await this.dirtyFiles(true)
     if (dirty.length) {
-      throw new UserError(
-        `Der Arbeitsbaum hat ${dirty.length} nicht committete Änderung(en). Erst committen oder stashen.`
-      )
+      throw new UserError(m.dirtyTree(dirty.length))
     }
     if (!(await this.currentBranch())) {
-      throw new UserError('HEAD ist von keinem Branch ausgecheckt (detached). Erst einen Branch auschecken.')
+      throw new UserError(m.detachedHead)
     }
 
     const msg = message?.trim()
@@ -372,31 +371,31 @@ export class Repo {
     if (conflicts.length) {
       return {
         status: 'conflicts',
-        message: `${conflicts.length} Datei(en) mit Konflikten. Im Bereich „Konflikte“ auflösen.`,
+        message: m.conflictFiles(conflicts.length),
         conflicts
       }
     }
     if (r.code !== 0) {
-      throw new GitError(`Merge nicht möglich: ${(r.stderr || r.stdout).trim()}`, r)
+      throw new GitError(m.mergeNotPossible((r.stderr || r.stdout).trim()), r)
     }
     if (/Already up.to.date/i.test(r.stdout)) {
-      return { status: 'up-to-date', message: 'Schon aktuell, nichts zu mergen.', conflicts: [] }
+      return { status: 'up-to-date', message: m.alreadyUpToDate, conflicts: [] }
     }
     if (mode === 'squash') {
       const staged = await this.git(['diff', '--cached', '--quiet'], [0, 1])
       if (staged.code === 0) {
-        return { status: 'up-to-date', message: 'Squash brachte keine Änderungen.', conflicts: [] }
+        return { status: 'up-to-date', message: m.squashNoChanges, conflicts: [] }
       }
-      await this.long(['commit', '-m', msg || `Squash-Merge von ${source}`])
-      return { status: 'squashed', message: `${source} als ein Commit übernommen.`, conflicts: [] }
+      await this.long(['commit', '-m', msg || m.squashCommitMessage(source)])
+      return { status: 'squashed', message: m.squashed(source), conflicts: [] }
     }
-    return { status: 'merged', message: `${source} gemergt.`, conflicts: [] }
+    return { status: 'merged', message: m.merged(source), conflicts: [] }
   }
 
   async abort(): Promise<void> {
     if (await this.mergeHead()) await this.git(['merge', '--abort'])
     else if ((await this.unmerged()).length || (await this.squashPending())) await this.git(['reset', '--merge'])
-    else throw new UserError('Es läuft kein Merge.')
+    else throw new UserError(m.noMergeRunning)
   }
 
   /**
@@ -416,13 +415,13 @@ export class Repo {
    */
   async undoMerge(before: string, after: string): Promise<void> {
     if ((await this.mergeHead()) || (await this.unmerged()).length) {
-      throw new UserError('Es läuft ein Merge. Dafür „Merge abbrechen“ nutzen.')
+      throw new UserError(m.mergeRunningUseAbort)
     }
     if ((await this.head()) !== after) {
-      throw new UserError('Seit dem Merge hat sich der Branch verändert. Rückgängig ist nicht mehr sicher möglich.')
+      throw new UserError(m.branchChangedSinceMerge)
     }
     if ((await this.dirtyFiles(true)).length) {
-      throw new UserError('Der Arbeitsbaum hat nicht committete Änderungen. Erst committen oder stashen.')
+      throw new UserError(m.dirtyTreeShort)
     }
     await this.verify(before)
     await this.git(['reset', '--merge', before])
@@ -431,7 +430,7 @@ export class Repo {
   async commitMerge(message?: string): Promise<string> {
     const left = await this.unmerged()
     if (left.length) {
-      throw new UserError(`Noch ${left.length} ungelöste Datei(en): ${left.slice(0, 5).join(', ')}`)
+      throw new UserError(m.unresolvedFiles(left.length, left.slice(0, 5).join(', ')))
     }
     const msg = message?.trim()
     await this.long(msg ? ['commit', '-m', msg] : ['commit', '--no-edit'])
@@ -443,7 +442,7 @@ export class Repo {
   /** Parks the tracked changes in the stash (untracked files stay); returns the stash commit and its files. */
   async park(message: string): Promise<{ sha: string; files: string[] }> {
     const files = await this.dirtyFiles(true)
-    if (!files.length) throw new UserError('Es gibt keine Änderungen zu parken.')
+    if (!files.length) throw new UserError(m.nothingToPark)
     await this.git(['stash', 'push', '--message', message])
     const sha = (await this.git(['rev-parse', '-q', '--verify', 'refs/stash'])).stdout.trim()
     return { sha, files }
@@ -471,7 +470,7 @@ export class Repo {
   private async requireUnmerged(path: string): Promise<string> {
     const rel = checkPath(path)
     if (!(await this.unmerged()).includes(rel)) {
-      throw new UserError(`"${rel}" hat keinen offenen Konflikt.`)
+      throw new UserError(m.noOpenConflict(rel))
     }
     return rel
   }
@@ -518,11 +517,11 @@ export class Repo {
     const rel = await this.requireUnmerged(path)
     const abs = this.files.join(this.root, rel)
     const text = await this.files.read(abs)
-    if (text === null) throw new UserError(`"${rel}" gibt es im Arbeitsbaum nicht.`)
+    if (text === null) throw new UserError(m.notInWorkingTree(rel))
     if (expect) {
       const block = conflictsOf(parseConflicts(text))[index]
       if (!block || displayLines(block.ours) !== expect.ours || displayLines(block.theirs) !== expect.theirs) {
-        throw new UserError(`"${rel}" hat sich inzwischen geändert. Die Ansicht wurde neu geladen; bitte erneut wählen.`)
+        throw new UserError(m.changedMeanwhile(rel))
       }
     }
     try {
@@ -550,7 +549,7 @@ export class Repo {
     const rel = await this.requireUnmerged(path)
     const text = await this.files.read(this.files.join(this.root, rel))
     if (text !== null && !text.includes('\0') && conflictsOf(parseConflicts(text)).length) {
-      throw new UserError(`"${rel}" enthält noch Konfliktmarker.`)
+      throw new UserError(m.stillHasMarkers(rel))
     }
     await this.git(['add', '-A', '--', rel])
   }
@@ -560,7 +559,7 @@ export class Repo {
 export function checkPath(path: string): string {
   const p = path.replace(/\\/g, '/').trim()
   if (!p || p.startsWith('/') || /^[a-zA-Z]:/.test(p) || p.split('/').includes('..') || p.includes('\0')) {
-    throw new UserError(`Ungültiger Pfad: "${path}"`)
+    throw new UserError(m.invalidPath(path))
   }
   return p
 }

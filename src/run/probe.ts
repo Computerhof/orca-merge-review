@@ -10,6 +10,7 @@ import { existsSync, lstatSync, symlinkSync, unlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { m } from '../core/messages.ts'
 import { git, type GitRunner } from '../git/runner.ts'
 import { runCommand, type CommandResult } from './command.ts'
 
@@ -56,13 +57,13 @@ export async function probeMerge(runner: GitRunner, root: string, source: string
     const unmerged = await git(runner, wt, ['diff', '--name-only', '--diff-filter=U', '-z'])
     const conflicts = [...new Set(unmerged.stdout.split('\0').filter(Boolean))]
     if (conflicts.length) {
-      return { status: 'conflicts', conflicts, tests: null, message: `${conflicts.length} Datei(en) mit Konflikten.` }
+      return { status: 'conflicts', conflicts, tests: null, message: m.probeConflicts(conflicts.length) }
     }
     if (merge.code !== 0) {
-      return { status: 'error', conflicts: [], tests: null, message: `Merge nicht möglich: ${(merge.stderr || merge.stdout).trim()}` }
+      return { status: 'error', conflicts: [], tests: null, message: m.mergeNotPossible((merge.stderr || merge.stdout).trim()) }
     }
     if (!options.testCommand) {
-      return { status: 'clean', conflicts: [], tests: null, message: 'Merge geht sauber durch.' }
+      return { status: 'clean', conflicts: [], tests: null, message: m.probeClean }
     }
     for (const name of SHARED_DEPENDENCY_DIRS) {
       const from = join(root, name)
@@ -79,12 +80,12 @@ export async function probeMerge(runner: GitRunner, root: string, source: string
       conflicts: [],
       tests,
       message: ok
-        ? 'Merge sauber, Tests grün.'
+        ? m.probePassed
         : tests.timedOut
-          ? 'Tests nach dem Zeitlimit abgebrochen.'
+          ? m.probeTimedOut
           : tests.cancelled
-            ? 'Abgebrochen.'
-            : `Tests rot (Exit ${tests.exitCode ?? '?'}).`
+            ? m.probeCancelled
+            : m.probeRed(tests.exitCode ?? '?')
     }
   } catch (error) {
     return { status: 'error', conflicts: [], tests: null, message: (error as Error).message }

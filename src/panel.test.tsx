@@ -325,3 +325,21 @@ test('finish mode when nothing is unresolved', async () => {
   assert.ok(view.find({ text: 'Merge abschließen' }))
   await view.unmount()
 })
+
+test('English UI: the panel speaks English when Orca runs in English', async () => {
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => base,
+      'repo.compare': () => comparison,
+      'watch.get': () => ({ watch: null })
+    }
+  })
+  const view = await mount(panel, { host, locale: 'en-US' })
+  await view.settled()
+  assert.ok(view.find({ text: 'Merge feature into main' }))
+  assert.match(view.summary().join('\n'), /1 conflicting file expected/)
+  assert.deepEqual(view.refusals, [])
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})

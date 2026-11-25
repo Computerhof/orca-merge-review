@@ -40,6 +40,7 @@ import { readiness, readinessLabel } from './core/readiness.ts'
 import { defined } from './defined.ts'
 import { VERSION } from './version.ts'
 import { localeOf, setLocale } from './i18n/index.ts'
+import { m } from './panel.messages.ts'
 import type {
   AgentActivity,
   Comparison,
@@ -114,7 +115,7 @@ async function load(): Promise<void> {
   const gen = generation
   const seq = ++loadSeq
   lastLoadAt = Date.now()
-  const st = await run('Lade …', () => plugin.request('repo.state', {}), true)
+  const st = await run(m.loading, () => plugin.request('repo.state', {}), true)
   if (!st || seq !== loadSeq || gen !== generation) return
   set(state, st)
   // K10: on the base workspace, show which workspaces of the project are ready to merge.
@@ -144,7 +145,7 @@ async function compare(ref: string): Promise<void> {
     return
   }
   const head = read(state)?.head ?? null
-  const c = await run('Vergleiche …', () => plugin.request('repo.compare', { source: ref }))
+  const c = await run(m.comparing, () => plugin.request('repo.compare', { source: ref }))
   if (read(source) === ref) {
     set(comparison, c ?? null)
     comparedHead = c ? head : null
@@ -154,7 +155,7 @@ async function compare(ref: string): Promise<void> {
 async function doMerge(): Promise<void> {
   set(confirm, null)
   const park = (read(state)?.dirtyFiles.length ?? 0) > 0 || undefined
-  const out = await run(park ? 'Parke Änderungen und merge …' : 'Merge läuft …', () =>
+  const out = await run(park ? m.parkingAndMerging : m.merging, () =>
     plugin.request('merge.run', defined({ source: read(source), mode: read(mode), message: read(message) || undefined, park }))
   )
   if (out) set(notice, { tone: out.status === 'conflicts' ? 'warning' : 'success', text: out.message })
@@ -171,17 +172,17 @@ async function act(label: string, fn: () => Promise<unknown>, done?: string): Pr
 }
 
 const openTab = (input: ReviewView) =>
-  run('Öffne …', () => plugin.request('review.open', defined(input)))
+  run(m.opening, () => plugin.request('review.open', defined(input)))
 
 /** K15: to the agent of a source workspace (its terminal), else to that workspace. */
 const focusAgent = (src: string) =>
-  run('Wechsle …', () => plugin.request('agent.focus', { source: src }), true)
+  run(m.switching, () => plugin.request('agent.focus', { source: src }), true)
 
 function AgentButton({ opt }: { opt: SourceOption }) {
   const live = !!opt.agent && opt.agent !== 'inactive'
   return (
     <Button size="xs" variant="ghost" icon={live ? 'agent' : 'open-external'} onPress={() => void focusAgent(opt.ref)}>
-      {live ? 'Zum Agenten' : 'Workspace öffnen'}
+      {live ? m.goToAgent : m.openWorkspace}
     </Button>
   )
 }
@@ -212,7 +213,7 @@ export function setup(ctx: PanelContext): void {
     }),
     plugin.on('conflict.autoResolved', ({ workspaceId, path }) => {
       if (workspaceId === read(state)?.workspace?.id) {
-        set(notice, { tone: 'success', text: `${path} ohne Konfliktmarker gespeichert und als gelöst markiert.` })
+        set(notice, { tone: 'success', text: m.autoResolved(path) })
       }
     }),
     plugin.on('source.updated', ({ workspaceId, source: src }) => {
@@ -227,8 +228,8 @@ export function setup(ctx: PanelContext): void {
   )
   void settings
     .get('defaultMode')
-    .then((m) => {
-      if (typeof m === 'string' && ['ff', 'no-ff', 'ff-only', 'squash'].includes(m)) set(mode, m as MergeMode)
+    .then((v) => {
+      if (typeof v === 'string' && ['ff', 'no-ff', 'ff-only', 'squash'].includes(v)) set(mode, v as MergeMode)
     })
     .catch(() => {})
   void load()
@@ -239,16 +240,24 @@ export function setup(ctx: PanelContext): void {
 /** Select values must not be empty: the "no file" choice gets a token instead. */
 const GENERAL = '__general__'
 
-const AGENT_LABEL: Record<AgentActivity, string> = {
-  working: 'Agent arbeitet',
-  permission: 'Agent wartet auf Freigabe',
-  done: 'Agent fertig',
-  active: 'Agent aktiv',
-  inactive: 'Agent ruht'
+/** The activity as a text; `short` leaves out the word "Agent" (table cell under an "Agent" column). */
+function agentLabel(a: AgentActivity, short = false): string {
+  switch (a) {
+    case 'working':
+      return short ? m.agentShortWorking : m.agentWorking
+    case 'permission':
+      return short ? m.agentShortPermission : m.agentPermission
+    case 'done':
+      return short ? m.agentShortDone : m.agentDone
+    case 'active':
+      return short ? m.agentShortActive : m.agentActive
+    case 'inactive':
+      return short ? m.agentShortInactive : m.agentInactive
+  }
 }
 
 function sourceLabel(s: SourceOption): string {
-  const tag = s.isBase ? ' (Base)' : s.kind === 'workspace' ? ' (Workspace)' : s.kind === 'remote' ? ' (Remote)' : ''
+  const tag = s.isBase ? m.tagBase : s.kind === 'workspace' ? m.tagWorkspace : s.kind === 'remote' ? m.tagRemote : ''
   return `${s.label}${tag}`
 }
 
@@ -257,7 +266,7 @@ function Header({ st }: { st: RepoState }) {
   return (
     <Row justify="between" align="center">
       <Stack gap="none">
-        <Heading level={2}>{st.branch ?? 'HEAD (losgelöst)'}</Heading>
+        <Heading level={2}>{st.branch ?? m.detachedHead}</Heading>
         {st.workspace && st.workspace.name !== st.branch ? (
           <Text muted size="xs" truncate>
             {st.workspace.name}
@@ -266,16 +275,16 @@ function Header({ st }: { st: RepoState }) {
       </Stack>
       <Row gap="xs" align="center">
         {st.merge ? (
-          <Badge tone="warning">Merge läuft</Badge>
+          <Badge tone="warning">{m.mergeRunning}</Badge>
         ) : dirty ? (
-          <Badge tone="warning">{`${dirty} geändert`}</Badge>
+          <Badge tone="warning">{m.changedCount(dirty)}</Badge>
         ) : (
-          <Badge tone="success">sauber</Badge>
+          <Badge tone="success">{m.clean}</Badge>
         )}
-        <IconButton icon="refresh" label="Neu laden" variant="ghost" size="sm" onPress={() => void load()} />
+        <IconButton icon="refresh" label={m.reload} variant="ghost" size="sm" onPress={() => void load()} />
         <IconButton
           icon="open-external"
-          label="Breiten Tab öffnen"
+          label={m.openWideTab}
           variant="ghost"
           size="sm"
           onPress={() => void openTab({ view: 'overview', source: read(source) || undefined })}
@@ -287,24 +296,24 @@ function Header({ st }: { st: RepoState }) {
 
 function Prediction({ c }: { c: Comparison }) {
   const p = c.preview
-  if (p.upToDate) return <Callout tone="neutral" icon="check" title="Schon enthalten">Nichts zu mergen.</Callout>
+  if (p.upToDate) return <Callout tone="neutral" icon="check" title={m.alreadyIncluded}>{m.nothingToMerge}</Callout>
   if (p.fastForward)
     return (
-      <Callout tone="success" icon="check" title="Fast-forward möglich">
-        Kein Merge-Commit nötig, keine Konflikte.
+      <Callout tone="success" icon="check" title={m.fastForwardPossible}>
+        {m.fastForwardBody}
       </Callout>
     )
   if (p.unrelated)
     return (
-      <Callout tone="danger" icon="error" title="Keine gemeinsame Historie">
-        Die beiden Branches haben keinen gemeinsamen Vorfahren. Git verweigert diesen Merge.
+      <Callout tone="danger" icon="error" title={m.noCommonHistory}>
+        {m.noCommonHistoryBody}
       </Callout>
     )
   if (p.clean === null)
-    return <Callout tone="neutral" icon="info" title="Keine Vorhersage">Git ist zu alt für merge-tree (ab 2.38).</Callout>
-  if (p.clean) return <Callout tone="success" icon="check" title="Konfliktfrei vorhergesagt" />
+    return <Callout tone="neutral" icon="info" title={m.noPrediction}>{m.noPredictionBody}</Callout>
+  if (p.clean) return <Callout tone="success" icon="check" title={m.predictedClean} />
   return (
-    <Callout tone="warning" icon="warning" title={`${p.conflicts.length} Konflikt-Datei(en) erwartet`}>
+    <Callout tone="warning" icon="warning" title={m.conflictFilesExpected(p.conflicts.length)}>
       <Text size="xs">{p.conflicts.slice(0, 8).join(', ') + (p.conflicts.length > 8 ? ' …' : '')}</Text>
     </Callout>
   )
@@ -324,10 +333,10 @@ function ModeCompare({ st }: { st: RepoState }) {
       <DirtyCard st={st} />
       <ParkedCard st={st} />
       {st.lastMerge ? (
-        <Callout tone="success" icon="check" title={`${st.lastMerge.source} übernommen`}>
+        <Callout tone="success" icon="check" title={m.lastMergeTitle(st.lastMerge.source)}>
           <Stack gap="xs">
             <Text size="xs">
-              {`${st.lastMerge.commits} Commit(s) · `}
+              {m.commitsDot(st.lastMerge.commits)}
               <RelativeTime at={st.lastMerge.at} />
             </Text>
             {(() => {
@@ -337,17 +346,17 @@ function ModeCompare({ st }: { st: RepoState }) {
             })()}
             {conf === 'undo' ? (
               <Row gap="xs" wrap>
-                <Text size="xs" tone="danger">{`HEAD zurück auf ${st.lastMerge.before.slice(0, 8)}?`}</Text>
-                <Button size="xs" tone="danger" onPress={() => act('Mache rückgängig …', () => plugin.request('merge.undo', {}), 'Merge rückgängig gemacht.')}>
-                  Ja, rückgängig
+                <Text size="xs" tone="danger">{m.undoHeadBack(st.lastMerge.before.slice(0, 8))}</Text>
+                <Button size="xs" tone="danger" onPress={() => act(m.undoing, () => plugin.request('merge.undo', {}), m.mergeUndone)}>
+                  {m.undoYes}
                 </Button>
                 <Button size="xs" variant="ghost" onPress={() => set(confirm, null)}>
-                  Nein
+                  {m.undoNo}
                 </Button>
               </Row>
             ) : (
               <Button size="xs" variant="outline" icon="remove" onPress={() => set(confirm, 'undo')}>
-                Merge rückgängig
+                {m.undoMerge}
               </Button>
             )}
           </Stack>
@@ -357,9 +366,9 @@ function ModeCompare({ st }: { st: RepoState }) {
       <OverviewSection />
 
       <Select
-        label="Quelle"
+        label={m.source}
         value={src}
-        placeholder="Branch oder Workspace wählen"
+        placeholder={m.sourcePlaceholder}
         options={st.sources.slice(0, 400).map((s) => ({ value: s.ref, label: sourceLabel(s) }))}
         onChange={(v) => void compare(v)}
       />
@@ -367,16 +376,16 @@ function ModeCompare({ st }: { st: RepoState }) {
         <Row gap="xs" align="center">
           {opt.agent && opt.agent !== 'inactive' ? (
             <Badge tone={opt.agent === 'working' || opt.agent === 'permission' ? 'warning' : 'neutral'}>
-              {AGENT_LABEL[opt.agent]}
+              {agentLabel(opt.agent)}
             </Badge>
           ) : null}
           <AgentButton opt={opt} />
         </Row>
       ) : null}
       {read(stale) ? (
-        <Callout tone="accent" icon="agent" title="Agent der Quelle ist fertig">
+        <Callout tone="accent" icon="agent" title={m.sourceAgentDone}>
           <Button size="xs" icon="refresh" onPress={() => void compare(src)}>
-            Neu vergleichen
+            {m.compareAgain}
           </Button>
         </Callout>
       ) : null}
@@ -385,15 +394,15 @@ function ModeCompare({ st }: { st: RepoState }) {
         <Stack gap="sm">
           {c.preview.upToDate ? null : (
             <Text weight="medium">
-              {`${c.ahead} Commit(s) kommen rein · ${c.files.length} Datei(en) · +${added} −${deleted}`}
+              {m.incomingSummary(c.ahead, c.files.length, added, deleted)}
             </Text>
           )}
-          {c.behind ? <Text muted size="xs">{`${st.branch} ist ${c.behind} Commit(s) weiter als ${src}.`}</Text> : null}
+          {c.behind ? <Text muted size="xs">{m.branchAhead(st.branch, c.behind, src)}</Text> : null}
           <Prediction c={c} />
           {c.preview.upToDate ? null : <Details st={st} c={c} src={src} opt={opt} />}
         </Stack>
       ) : src && read(busy) ? (
-        <Spinner label="Vergleiche …" />
+        <Spinner label={m.comparing} />
       ) : null}
 
       <TestSection st={st} />
@@ -407,14 +416,14 @@ function DirtyCard({ st }: { st: RepoState }) {
   const n = st.dirtyFiles.length
   if (!n || st.merge) return null
   return (
-    <Callout tone="warning" icon="warning" title={`${n} nicht committete Änderung(en)`}>
+    <Callout tone="warning" icon="warning" title={m.dirtyTitle(n)}>
       <Stack gap="xs">
         <Text size="xs">{st.dirtyFiles.slice(0, 6).join(', ') + (n > 6 ? ` … (+${n - 6})` : '')}</Text>
         <Text size="xs">
-          Ein Merge würde sie gefährden. Committe sie, oder lass sie beim Merge parken: Sie kommen danach automatisch zurück.
+          {m.dirtyBody}
         </Text>
-        <Button size="xs" variant="outline" icon="branch" onPress={() => void run('Öffne …', () => plugin.request('ui.sourceControl', {}), true)}>
-          Quellcodeverwaltung zeigen
+        <Button size="xs" variant="outline" icon="branch" onPress={() => void run(m.opening, () => plugin.request('ui.sourceControl', {}), true)}>
+          {m.showSourceControl}
         </Button>
       </Stack>
     </Callout>
@@ -426,26 +435,26 @@ function ParkedCard({ st }: { st: RepoState }) {
   const p = st.parked
   if (!p || st.merge) return null
   return (
-    <Callout tone="accent" icon="info" title={`${p.files.length} geparkte Änderung(en) liegen im Stash`}>
+    <Callout tone="accent" icon="info" title={m.parkedTitle(p.files.length)}>
       <Stack gap="xs">
         <Text size="xs">{p.files.slice(0, 6).join(', ') + (p.files.length > 6 ? ' …' : '')}</Text>
         <Text size="xs" muted>
-          {`Geparkt für den Merge von ${p.source}. Der Merge hat dieselben Dateien geändert; beim Zurückholen können Konfliktmarker entstehen, die du dann auflöst.`}
+          {m.parkedBody(p.source)}
         </Text>
         <Button
           size="xs"
           tone="accent"
           onPress={async () => {
-            const r = await run('Hole zurück …', () => plugin.request('stash.restore', {}))
+            const r = await run(m.restoring, () => plugin.request('stash.restore', {}))
             if (r) {
               set(notice, r.result === 'conflict'
-                ? { tone: 'warning', text: 'Zurückgeholt mit Konflikten: die Dateien enthalten Konfliktmarker. Der Stash bleibt zur Sicherheit erhalten.' }
-                : { tone: 'success', text: 'Geparkte Änderungen sind zurück.' })
+                ? { tone: 'warning', text: m.restoredWithConflicts }
+                : { tone: 'success', text: m.restoredClean })
             }
             await load()
           }}
         >
-          Zurückholen
+          {m.restoreParked}
         </Button>
       </Stack>
     </Callout>
@@ -457,17 +466,17 @@ function ParkedCard({ st }: { st: RepoState }) {
 function StalledAgentCard({ st }: { st: RepoState }) {
   if (!st.stalledAgent) return null
   return (
-    <Callout tone="warning" title="Der gestartete Agent hat seinen Auftrag nicht bekommen">
+    <Callout tone="warning" title={m.stalledTitle}>
       <Stack gap="sm">
         <Text size="sm">
-          Orca hat den Start-Auftrag nicht abgeschickt; der Agent wartet leer. Merge &amp; Review kann ihn jetzt eintippen.
+          {m.stalledBody}
         </Text>
         <Row gap="sm">
-          <Button size="sm" icon="agent" onPress={() => void act('Tippe Auftrag …', () => plugin.request('agent.retryPrompt', {}), 'Auftrag an den Agenten geschickt.')}>
-            Auftrag eintippen
+          <Button size="sm" icon="agent" onPress={() => void act(m.typingTask, () => plugin.request('agent.retryPrompt', {}), m.taskSent)}>
+            {m.typeTask}
           </Button>
           <Button size="sm" variant="ghost" onPress={() => void act('…', () => plugin.request('agent.dismissStalled', {}))}>
-            Ausblenden
+            {m.dismiss}
           </Button>
         </Row>
       </Stack>
@@ -480,7 +489,7 @@ function JobCard({ st }: { st: RepoState }) {
   if (!job) return null
   const dismiss = (
     <Button size="xs" variant="ghost" icon="close" onPress={() => act('…', () => plugin.request('job.dismiss', {}))}>
-      Ausblenden
+      {m.dismiss}
     </Button>
   )
   if (job.status === 'running') {
@@ -488,11 +497,11 @@ function JobCard({ st }: { st: RepoState }) {
       <Callout tone="accent" icon="activity" title={job.message}>
         <Row gap="xs" align="center" wrap>
           <Text size="xs" muted>
-            {'gestartet '}
+            {m.startedAgo}
             <RelativeTime at={job.startedAt} />
           </Text>
-          <Button size="xs" variant="ghost" tone="danger" onPress={() => act('Breche ab …', () => plugin.request('job.cancel', {}))}>
-            Abbrechen
+          <Button size="xs" variant="ghost" tone="danger" onPress={() => act(m.cancelling, () => plugin.request('job.cancel', {}))}>
+            {m.cancel}
           </Button>
         </Row>
       </Callout>
@@ -503,7 +512,7 @@ function JobCard({ st }: { st: RepoState }) {
       <Callout tone="warning" icon="warning" title={job.message}>
         <Stack gap="xs">
           <Text size="xs">{job.conflicts.slice(0, 10).join(', ') + (job.conflicts.length > 10 ? ' …' : '')}</Text>
-          <Text size="xs" muted>Dein Arbeitsbaum ist unverändert. Ein echter Merge stoppt bei diesen Dateien.</Text>
+          <Text size="xs" muted>{m.jobConflictsBody}</Text>
           {dismiss}
         </Stack>
       </Callout>
@@ -524,7 +533,7 @@ function JobCard({ st }: { st: RepoState }) {
                 set(confirm, 'merge')
               }}
             >
-              Jetzt echt mergen
+              {m.mergeForReal}
             </Button>
           ) : null}
           {dismiss}
@@ -537,34 +546,34 @@ function JobCard({ st }: { st: RepoState }) {
   return (
     <Callout tone="danger" icon="error" title={job.message}>
       <Stack gap="xs">
-        {job.tail.length ? <CodeView label="Letzte Ausgabe" code={job.tail.join('\n')} maxHeight="sm" wrap /> : null}
+        {job.tail.length ? <CodeView label={m.lastOutput} code={job.tail.join('\n')} maxHeight="sm" wrap /> : null}
         <Row gap="xs" wrap>
           {red && job.kind === 'tests' ? (
             <Button
               size="xs"
               icon="agent"
               onPress={async () => {
-                const r = await run('Starte Agent …', () => plugin.request('tests.fix', {}))
-                if (r) set(notice, { tone: 'success', text: 'Agent gestartet: er sucht die Ursache und committet eine Korrektur.' })
+                const r = await run(m.startingAgent, () => plugin.request('tests.fix', {}))
+                if (r) set(notice, { tone: 'success', text: m.agentStartedFix })
               }}
             >
-              Agent repariert
+              {m.agentFixes}
             </Button>
           ) : null}
           {job.command ? (
-            <Button size="xs" variant="outline" icon="terminal" onPress={() => void run('Öffne Terminal …', () => plugin.request('tests.terminal', {}))}>
-              Im Terminal ansehen
+            <Button size="xs" variant="outline" icon="terminal" onPress={() => void run(m.openingTerminal, () => plugin.request('tests.terminal', {}))}>
+              {m.showInTerminal}
             </Button>
           ) : null}
           {job.kind === 'tests' ? (
-            <Button size="xs" variant="ghost" icon="refresh" onPress={() => act('Starte Tests …', () => plugin.request('tests.run', {}))}>
-              Erneut
+            <Button size="xs" variant="ghost" icon="refresh" onPress={() => act(m.startingTests, () => plugin.request('tests.run', {}))}>
+              {m.retry}
             </Button>
           ) : null}
           {dismiss}
         </Row>
         {red && job.kind === 'tests' && st.lastMerge ? (
-          <Text size="xs" muted>Oder oben „Merge rückgängig“, wenn der Merge selbst das Problem ist.</Text>
+          <Text size="xs" muted>{m.orUndoAbove}</Text>
         ) : null}
       </Stack>
     </Callout>
@@ -577,17 +586,17 @@ function OverviewSection() {
   if (!o?.rows.length) return null
   const ready = o.rows.filter((r) => readiness(r) === 0).length
   const conflicts = o.rows.filter((r) => readiness(r) === 1).length
-  const title = `Workspaces des Projekts · ${ready} bereit` + (conflicts ? ` · ${conflicts} mit Konflikten` : '')
+  const title = m.overviewTitle(ready, conflicts)
   return (
-    <Collapsible title={title} description={`Gegen ${o.base} geprüft (merge-tree, ändert nichts).`} defaultOpen>
+    <Collapsible title={title} description={m.overviewDescription(o.base)} defaultOpen>
       <Table
-        label="Workspaces des Projekts (Enter oder Doppelklick vergleicht)"
+        label={m.overviewLabel}
         maxHeight="md"
         columns={[
-          { key: 'name', label: 'Workspace' },
-          { key: 'agent', label: 'Agent', width: 'sm', hideBelow: 'sm' },
-          { key: 'delta', label: 'vor/hinter', width: 'sm', align: 'end' },
-          { key: 'state', label: 'Vorhersage', width: 'md' }
+          { key: 'name', label: m.colWorkspace },
+          { key: 'agent', label: m.colAgent, width: 'sm', hideBelow: 'sm' },
+          { key: 'delta', label: m.colAheadBehind, width: 'sm', align: 'end' },
+          { key: 'state', label: m.colPrediction, width: 'md' }
         ]}
         hasMore={o.rows.length > read(overviewRows)}
         onLoadMore={() => set(overviewRows, read(overviewRows) + PAGE)}
@@ -596,7 +605,7 @@ function OverviewSection() {
           disabled: readiness(r) === 3,
           cells: {
             name: r.name === r.branch ? r.name : `${r.name} · ${r.branch}`,
-            agent: r.agent && r.agent !== 'inactive' ? AGENT_LABEL[r.agent].replace(/^Agent /, '') : '–',
+            agent: r.agent && r.agent !== 'inactive' ? agentLabel(r.agent, true) : '–',
             delta: `+${r.ahead} / −${r.behind}`,
             state: readinessLabel(r)
           }
@@ -614,25 +623,25 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
   const expected = new Set(c.preview.conflicts)
   const dirty = st.dirtyFiles.length
   const blockedBy = !st.branch
-    ? 'HEAD ist losgelöst: erst einen Branch auschecken.'
+    ? m.blockedDetached
     : st.parked
-      ? 'Erst die geparkten Änderungen vom letzten Merge zurückholen (Karte oben).'
+      ? m.blockedParked
       : null
   return (
     <Stack gap="sm">
       <Button icon="open-external" variant="outline" onPress={() => void openTab({ view: 'overview', source: src })}>
-        Im breiten Tab prüfen
+        {m.reviewInWideTab}
       </Button>
 
-      <Collapsible title={c.ahead > c.incoming.length ? `Commits (neueste ${c.incoming.length} von ${c.ahead})` : `Commits (${c.ahead})`}>
+      <Collapsible title={c.ahead > c.incoming.length ? m.commitsTitleLatest(c.incoming.length, c.ahead) : m.commitsTitle(c.ahead)}>
         <Table
-          label="Eingehende Commits"
+          label={m.incomingCommits}
           maxHeight="md"
-          emptyText="Keine"
+          emptyText={m.none}
           columns={[
-            { key: 'short', label: 'Commit', width: 'xs' },
-            { key: 'subject', label: 'Nachricht' },
-            { key: 'at', label: 'Wann', width: 'sm', hideBelow: 'sm' }
+            { key: 'short', label: m.colCommit, width: 'xs' },
+            { key: 'subject', label: m.colMessage },
+            { key: 'at', label: m.colWhen, width: 'sm', hideBelow: 'sm' }
           ]}
           hasMore={c.incoming.length > read(commitRows)}
           onLoadMore={() => set(commitRows, read(commitRows) + PAGE)}
@@ -643,14 +652,14 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
         />
       </Collapsible>
 
-      <Collapsible title={`Dateien (${c.files.length})`} defaultOpen>
+      <Collapsible title={m.filesTitle(c.files.length)} defaultOpen>
         <Table
-          label="Geänderte Dateien (Enter oder Doppelklick öffnet den Diff)"
+          label={m.changedFiles}
           maxHeight="md"
-          emptyText="Keine"
+          emptyText={m.none}
           columns={[
-            { key: 'st', label: 'Art', width: 'xs' },
-            { key: 'path', label: 'Datei' },
+            { key: 'st', label: m.colKind, width: 'xs' },
+            { key: 'path', label: m.colFile },
             { key: 'delta', label: '±', width: 'sm', align: 'end' }
           ]}
           hasMore={c.files.length > read(fileRows)}
@@ -660,7 +669,7 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
             cells: {
               st: (expected.has(f.path) ? '⚠ ' : '') + f.status,
               path: f.from ? `${f.from} → ${f.path}` : f.path,
-              delta: f.added === null ? 'binär' : `+${f.added} −${f.deleted}`
+              delta: f.added === null ? m.binary : `+${f.added} −${f.deleted}`
             }
           }))}
           onRowAction={({ key }) => void openTab({ view: 'diff', source: src, path: key })}
@@ -668,36 +677,35 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
       </Collapsible>
 
       {opt?.kind === 'workspace' ? (
-        <Collapsible title="Anmerkung an den Agenten der Quelle">
+        <Collapsible title={m.noteTitle}>
           <Stack gap="sm">
             <Select
-              label="Datei (optional)"
+              label={m.noteFile}
               value={read(notePath) || GENERAL}
-              options={[{ value: GENERAL, label: 'Allgemein' }, ...c.files.slice(0, 300).map((f) => ({ value: f.path, label: f.path }))]}
+              options={[{ value: GENERAL, label: m.noteGeneral }, ...c.files.slice(0, 300).map((f) => ({ value: f.path, label: f.path }))]}
               onChange={(v) => set(notePath, v === GENERAL ? '' : v)}
             />
             <Textarea
-              label="Anmerkung"
+              label={m.noteLabel}
               rows={3}
               value={read(note)}
-              placeholder="Was soll der Agent ändern?"
+              placeholder={m.notePlaceholder}
               onChange={(v) => set(note, v)}
             />
             <Button
               icon="agent"
               disabled={!read(note).trim() || working}
               onPress={async () => {
-                const r = await run('Sende …', () =>
+                const r = await run(m.sending, () =>
                   plugin.request('agent.feedback', defined({ source: src, path: read(notePath) || undefined, note: read(note) }))
                 )
                 if (r) {
                   set(note, '')
-                  const how = r.how === 'sent' ? 'an den laufenden Agenten geschickt' : r.how === 'resumed' ? 'an die fortgesetzte Session übergeben' : 'an einen neuen Agenten übergeben'
-                  set(notice, { tone: 'success', text: `Anmerkung ${how}. Sobald er fertig ist, meldet sich das Panel.` })
+                  set(notice, { tone: 'success', text: m.noteSent(r.how) })
                 }
               }}
             >
-              An Agent senden
+              {m.sendToAgent}
             </Button>
           </Stack>
         </Collapsible>
@@ -705,51 +713,49 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
 
       <Separator />
       <Select
-        label="Art"
+        label={m.modeLabel}
         value={read(mode)}
         options={[
-          { value: 'no-ff', label: 'Merge-Commit (Historie bleibt sichtbar)' },
-          { value: 'ff', label: 'Fast-forward, wenn möglich' },
-          { value: 'ff-only', label: 'Nur Fast-forward' },
-          { value: 'squash', label: 'Squash (ein Commit)' }
+          { value: 'no-ff', label: m.modeNoFf },
+          { value: 'ff', label: m.modeFf },
+          { value: 'ff-only', label: m.modeFfOnly },
+          { value: 'squash', label: m.modeSquash }
         ]}
         onChange={(v) => set(mode, v as MergeMode)}
       />
       {read(mode) !== 'ff-only' ? (
-        <Input label="Commit-Nachricht (optional)" value={read(message)} placeholder="Standard von Git" onChange={(v) => set(message, v)} />
+        <Input label={m.commitMessage} value={read(message)} placeholder={m.commitMessageDefault} onChange={(v) => set(message, v)} />
       ) : null}
       {blockedBy ? <Text size="xs" tone="warning">{blockedBy}</Text> : null}
       <Button
         variant="outline"
         icon="play"
         disabled={working || st.job?.status === 'running'}
-        tooltip={`Merged ${src} in einem temporären Worktree${st.testCommand ? ` und führt dort „${st.testCommand}“ aus` : ''}. Hier ändert sich nichts.`}
+        tooltip={m.probeTooltip(src, st.testCommand)}
         onPress={async () => {
-          const r = await run('Starte Probe-Merge …', () => plugin.request('merge.probe', { source: src }))
+          const r = await run(m.probing, () => plugin.request('merge.probe', { source: src }))
           if (r) void load()
         }}
       >
-        {st.testCommand ? 'Probe-Merge mit Tests' : 'Probe-Merge'}
+        {st.testCommand ? m.probeWithTests : m.probe}
       </Button>
       {conf === 'merge' ? (
-        <Callout tone="accent" title={`${src} → ${st.branch} mergen?`}>
+        <Callout tone="accent" title={m.confirmMergeTitle(src, st.branch)}>
           <Stack gap="xs">
             <Text size="xs">
-              {`${c.ahead} Commit(s), ${c.files.length} Datei(en)` +
-                (c.preview.clean === false ? `, ${c.preview.conflicts.length} Konflikt-Datei(en) erwartet` : '') +
-                (opt?.agent === 'working' ? '. Achtung: der Agent der Quelle arbeitet noch.' : '.')}
+              {m.confirmSummary(c.ahead, c.files.length, c.preview.clean === false ? c.preview.conflicts.length : null, opt?.agent === 'working')}
             </Text>
             {dirty ? (
               <Text size="xs" tone="warning">
-                {`Vorher werden ${dirty} geänderte Datei(en) geparkt (git stash) und nach dem Merge zurückgeholt.`}
+                {m.confirmParkNote(dirty)}
               </Text>
             ) : null}
             <Row gap="xs">
               <Button tone="accent" onPress={() => void doMerge()}>
-                {dirty ? 'Ja, parken und mergen' : 'Ja, mergen'}
+                {dirty ? m.yesParkAndMerge : m.yesMerge}
               </Button>
               <Button variant="ghost" onPress={() => set(confirm, null)}>
-                Abbrechen
+                {m.cancel}
               </Button>
             </Row>
           </Stack>
@@ -762,7 +768,7 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
           tooltip={blockedBy ?? undefined}
           onPress={() => set(confirm, 'merge')}
         >
-          {dirty ? `Änderungen parken und ${src} mergen` : `${src} → ${st.branch} mergen`}
+          {dirty ? m.parkAndMerge(src) : m.mergeInto(src, st.branch)}
         </Button>
       )}
     </Stack>
@@ -774,47 +780,47 @@ function TestSection({ st }: { st: RepoState }) {
   const draft = read(testDraft)
   const value = draft ?? st.testCommand ?? ''
   const changed = draft !== null && draft.trim() !== (st.testCommand ?? '')
-  const project = st.projectName ?? st.workspace?.name ?? 'dieses Projekt'
+  const project = st.projectName ?? st.workspace?.name ?? m.thisProject
   const save = async (command: string) => {
-    const r = await run('Speichere …', () => plugin.request('project.setTestCommand', { command }))
+    const r = await run(m.saving, () => plugin.request('project.setTestCommand', { command }))
     if (r) {
       set(testDraft, null)
-      set(notice, { tone: 'success', text: r.testCommand ? `Testbefehl für ${project}: ${r.testCommand}` : `Kein Testbefehl mehr für ${project}.` })
+      set(notice, { tone: 'success', text: r.testCommand ? m.testCommandSaved(project, r.testCommand) : m.testCommandRemoved(project) })
       await load()
     }
   }
   const suggestion = st.suggestedTest && st.suggestedTest.command !== st.testCommand ? st.suggestedTest : null
   return (
     <Collapsible
-      title={st.testCommand ? `Tests für ${project}: ${st.testCommand}` : `Tests für ${project}: keine`}
-      description="Gilt für alle Workspaces dieses Projekts. Läuft nach jedem Merge und beim Probe-Merge."
+      title={st.testCommand ? m.testsTitle(project, st.testCommand) : m.testsTitleNone(project)}
+      description={m.testsDescription}
       defaultOpen={!st.testCommand && !!suggestion}
     >
       <Stack gap="sm">
         <Input
-          label="Testbefehl"
+          label={m.testCommand}
           value={value}
-          placeholder={st.suggestedTest?.command ?? 'z. B. npm test'}
+          placeholder={st.suggestedTest?.command ?? m.testCommandPlaceholder}
           onChange={(v) => set(testDraft, v)}
           onSubmit={(v) => void save(v)}
         />
         <Row gap="xs" wrap>
           <Button size="xs" disabled={!changed} onPress={() => void save(value)}>
-            Speichern
+            {m.save}
           </Button>
           {suggestion ? (
             <Button size="xs" variant="outline" tooltip={suggestion.because} onPress={() => void save(suggestion.command)}>
-              {`Vorschlag übernehmen: ${suggestion.command}`}
+              {m.useSuggestion(suggestion.command)}
             </Button>
           ) : null}
           {st.testCommand ? (
-            <Button size="xs" variant="ghost" icon="play" disabled={st.job?.status === 'running'} onPress={() => act('Starte Tests …', () => plugin.request('tests.run', {}))}>
-              Jetzt ausführen
+            <Button size="xs" variant="ghost" icon="play" disabled={st.job?.status === 'running'} onPress={() => act(m.startingTests, () => plugin.request('tests.run', {}))}>
+              {m.runNow}
             </Button>
           ) : null}
           {st.testCommand ? (
             <Button size="xs" variant="ghost" tone="danger" onPress={() => void save('')}>
-              Entfernen
+              {m.remove}
             </Button>
           ) : null}
         </Row>
@@ -828,20 +834,20 @@ function WatchSection({ st }: { st: RepoState }) {
   const base = st.sources.find((s) => s.isBase)
   if (!base && !w) return null
   return (
-    <Collapsible title="Merge-Wächter (Orca-Automation)" description="Prüft regelmäßig per Agent, ob die Base noch sauber hereinpasst.">
+    <Collapsible title={m.watchTitle} description={m.watchDescription}>
       <Stack gap="sm">
         <Switch
-          label={w ? `Aktiv (${w.schedule})` : 'Einrichten'}
+          label={w ? m.watchActive(w.schedule) : m.watchSetUp}
           checked={!!w?.enabled}
           disabled={!!read(busy)}
           onChange={async (on) => {
-            const r = await run('Speichere …', () => plugin.request('watch.set', { enabled: on }))
+            const r = await run(m.saving, () => plugin.request('watch.set', { enabled: on }))
             if (r) set(watch, r.watch)
           }}
         />
         {w?.nextRunAt ? (
           <Text muted size="xs">
-            {'Nächster Lauf '}
+            {m.nextRun}
             <RelativeTime at={w.nextRunAt} />
           </Text>
         ) : null}
@@ -851,11 +857,11 @@ function WatchSection({ st }: { st: RepoState }) {
             variant="ghost"
             tone="danger"
             onPress={async () => {
-              const r = await run('Entferne …', () => plugin.request('watch.set', { enabled: false, remove: true }))
+              const r = await run(m.removing, () => plugin.request('watch.set', { enabled: false, remove: true }))
               if (r) set(watch, r.watch)
             }}
           >
-            Entfernen
+            {m.remove}
           </Button>
         ) : null}
       </Stack>
@@ -864,9 +870,9 @@ function WatchSection({ st }: { st: RepoState }) {
 }
 
 function ModeResolve({ st }: { st: RepoState }) {
-  const m = st.merge!
-  const open = m.conflicts.filter((f) => !m.markerFree.includes(f))
-  const total = m.conflicts.length
+  const mg = st.merge!
+  const open = mg.conflicts.filter((f) => !mg.markerFree.includes(f))
+  const total = mg.conflicts.length
   const conf = read(confirm)
   const finished = total === 0
 
@@ -875,27 +881,27 @@ function ModeResolve({ st }: { st: RepoState }) {
       <Callout
         tone={finished ? 'success' : 'warning'}
         icon={finished ? 'check' : 'warning'}
-        title={finished ? 'Alle Konflikte gelöst' : `Merge ${m.source} → ${st.branch} läuft`}
+        title={finished ? m.allResolved : m.mergeInProgress(mg.source, st.branch)}
       >
-        {finished ? 'Prüfen und abschließen.' : `${open.length} von ${total} Datei(en) noch mit Konfliktmarkern.`}
+        {finished ? m.reviewAndFinish : m.stillWithMarkers(open.length, total)}
       </Callout>
 
       {!finished ? (
         <Stack gap="sm">
-          <Progress label="Fortschritt" value={total ? Math.round(((total - open.length) / total) * 100) : 100} />
-          <List label="Konflikt-Dateien">
-            {m.conflicts.map((path) => {
-              const ready = m.markerFree.includes(path)
+          <Progress label={m.progress} value={total ? Math.round(((total - open.length) / total) * 100) : 100} />
+          <List label={m.conflictFiles}>
+            {mg.conflicts.map((path) => {
+              const ready = mg.markerFree.includes(path)
               return (
                 ready ? (
                   // A pressable ListItem cannot hold buttons, so a ready file offers both as buttons.
-                  <ListItem key={path} title={path} icon="check" description="keine Marker mehr">
+                  <ListItem key={path} title={path} icon="check" description={m.noMarkersLeft}>
                     <Row gap="xs">
                       <Button size="xs" variant="ghost" onPress={() => void openTab({ view: 'conflict', path })}>
-                        Ansehen
+                        {m.view}
                       </Button>
-                      <Button size="xs" onPress={() => act('Markiere …', () => plugin.request('conflict.markResolved', { path }))}>
-                        Als gelöst markieren
+                      <Button size="xs" onPress={() => act(m.marking, () => plugin.request('conflict.markResolved', { path }))}>
+                        {m.markResolved}
                       </Button>
                     </Row>
                   </ListItem>
@@ -904,7 +910,7 @@ function ModeResolve({ st }: { st: RepoState }) {
                     key={path}
                     title={path}
                     icon="warning"
-                    description="offen: klicken öffnet den Konflikt"
+                    description={m.openClickToOpen}
                     onPress={() => void openTab({ view: 'conflict', path })}
                   />
                 )
@@ -914,56 +920,56 @@ function ModeResolve({ st }: { st: RepoState }) {
           <Row gap="xs" wrap>
             {open[0] ? (
               <Button tone="accent" icon="next" onPress={() => void openTab({ view: 'conflict', path: open[0] })}>
-                Nächsten Konflikt öffnen
+                {m.openNextConflict}
               </Button>
             ) : null}
             <Button
               variant="outline"
               icon="agent"
               disabled={!open.length}
-              tooltip="Startet einen Agenten mit fertigem Auftrag. Er committet nicht, du prüfst und schließt ab."
+              tooltip={m.resolveTooltip}
               onPress={async () => {
-                const r = await run('Starte Agent …', () => plugin.request('agent.resolveConflicts', {}))
-                if (r) set(notice, { tone: 'success', text: 'Agent gestartet. Das Panel aktualisiert sich, während er arbeitet.' })
+                const r = await run(m.startingAgent, () => plugin.request('agent.resolveConflicts', {}))
+                if (r) set(notice, { tone: 'success', text: m.agentStartedResolve })
               }}
             >
-              Agent löst Konflikte
+              {m.agentResolves}
             </Button>
           </Row>
         </Stack>
       ) : (
         <Stack gap="sm">
-          <Input label="Commit-Nachricht (optional)" value={read(message)} placeholder="Von Git vorbereitet" onChange={(v) => set(message, v)} />
+          <Input label={m.commitMessage} value={read(message)} placeholder={m.commitMessagePrepared} onChange={(v) => set(message, v)} />
           <Button
             tone="accent"
             icon="check"
             onPress={() =>
-              act('Schließe ab …', () => plugin.request('merge.commit', defined({ message: read(message) || undefined })), 'Merge abgeschlossen.')
+              act(m.finishing, () => plugin.request('merge.commit', defined({ message: read(message) || undefined })), m.mergeCompleted)
             }
           >
-            Merge abschließen
+            {m.completeMerge}
           </Button>
         </Stack>
       )}
 
       <Separator />
       {conf === 'abort' ? (
-        <Callout tone="danger" title="Merge wirklich abbrechen?">
+        <Callout tone="danger" title={m.abortTitle}>
           <Stack gap="xs">
-            <Text size="xs">Alle Auflösungen gehen verloren; der Branch steht wieder wie vor dem Merge.</Text>
+            <Text size="xs">{m.abortBody}</Text>
             <Row gap="xs">
-              <Button tone="danger" onPress={() => act('Breche ab …', () => plugin.request('merge.abort', {}), 'Merge abgebrochen.')}>
-                Ja, abbrechen
+              <Button tone="danger" onPress={() => act(m.aborting, () => plugin.request('merge.abort', {}), m.mergeAborted)}>
+                {m.yesAbort}
               </Button>
               <Button variant="ghost" onPress={() => set(confirm, null)}>
-                Weiter auflösen
+                {m.keepResolving}
               </Button>
             </Row>
           </Stack>
         </Callout>
       ) : (
         <Button variant="ghost" tone="danger" icon="close" onPress={() => set(confirm, 'abort')}>
-          Merge abbrechen
+          {m.abortMerge}
         </Button>
       )}
     </Stack>
@@ -983,15 +989,15 @@ export default function Panel() {
         <Stack gap="sm">
           <Callout tone="danger">{n.text}</Callout>
           <Button icon="refresh" onPress={() => void load()}>
-            Erneut laden
+            {m.loadAgain}
           </Button>
         </Stack>
       )
     }
-    return <Spinner label="Lade Repository …" />
+    return <Spinner label={m.loadingRepository} />
   }
   if (st.problem || !st.workspace) {
-    return <EmptyState icon="branch" title="Merge & Review" description={st.problem ?? 'Kein Workspace geöffnet.'} />
+    return <EmptyState icon="branch" title="Merge & Review" description={st.problem ?? m.noWorkspace} />
   }
   return (
     <Stack gap="md">

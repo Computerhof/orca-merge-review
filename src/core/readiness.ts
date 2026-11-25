@@ -1,6 +1,7 @@
 // K10: how ready a workspace is to be merged into the base, and how the panel says it. Pure, shared
 // by the worker (sorting) and the panel (labels), tested in CI.
 import type { OverviewRow } from '../types.ts'
+import { m } from './messages.ts'
 
 /** 0 ready (clean or fast-forward), 1 conflicts, 2 cannot be predicted, 3 nothing to merge. */
 export function readiness(r: Pick<OverviewRow, 'ahead' | 'preview'>): 0 | 1 | 2 | 3 {
@@ -15,13 +16,13 @@ export function readinessLabel(r: Pick<OverviewRow, 'ahead' | 'preview'>): strin
   const p = r.preview
   switch (readiness(r)) {
     case 0:
-      return p.fastForward ? '✓ Fast-forward' : '✓ konfliktfrei'
+      return p.fastForward ? m.readyFastForward : m.readyClean
     case 1:
-      return `⚠ ${p.conflicts.length} Konflikt-Datei(en)`
+      return m.readyConflicts(p.conflicts.length)
     case 2:
-      return p.unrelated ? 'keine gemeinsame Historie' : 'keine Vorhersage'
+      return p.unrelated ? m.readyUnrelated : m.readyUnknown
     default:
-      return 'schon enthalten'
+      return m.readyIncluded
   }
 }
 
