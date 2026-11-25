@@ -12,6 +12,7 @@ import { registerHandlers } from './worker/handlers.ts'
 import { Memory } from './worker/memory.ts'
 import { m } from './worker/messages.ts'
 import { Monitor } from './worker/monitor.ts'
+import { stepOperation } from './worker/operations.ts'
 import { openReviewTab } from './worker/reviewTab.ts'
 import { SettingsCache } from './worker/settings.ts'
 import { Workspaces } from './worker/workspaces.ts'
@@ -68,7 +69,8 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     if (!settings.current.guardAgents) return
     const command = commandOf(e.input)
     if (!command) return
-    const deny = guardDecision(command, { merging: mon.isMerging(workspaces.canonical(e.workspaceId)) })
+    const operation = mon.operationOf(workspaces.canonical(e.workspaceId))
+    const deny = guardDecision(command, { merging: operation !== null, operation })
     if (deny) {
       orca.log(`guard: refused "${command.slice(0, 120)}"`)
       return { deny }
@@ -85,7 +87,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
   // K13: a conflicted file saved without markers is marked resolved shortly after (never refuses).
   orca.hooks.on('editor.save.before', (e) => onSave(circles, e))
 
-  // K14: prompts to an agent in a merging workspace get a one-line merge hint in front.
+  // K14: prompts to an agent in a merging (rebasing, cherry-picking) workspace get a one-line hint in front.
   orca.hooks.on('agent.prompt.before', async (e, next) => {
     const hint = await promptHint(circles, e).catch(() => null)
     if (hint) return next({ ...e, prompt: `${hint} ${e.prompt}` })
@@ -117,8 +119,18 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     return m.compareWith(base)
   })
 
+  // Finishes a merge; a rebase or cherry-pick goes on to its next commit (op.continue).
   orca.commands.register('mergeReview.finish', async () => {
     const ws = await workspaces.resolve()
+    const kind = await ws.repo.operation()
+    if (kind === 'rebase' || kind === 'cherry-pick') {
+      try {
+        const outcome = await stepOperation({ orca, memory, jobs: jobRunner }, ws, 'continue', settings.current.showBase)
+        return outcome.message
+      } finally {
+        mon.schedule(ws.info.id, 'command')
+      }
+    }
     const hash = await ws.repo.commitMerge()
     const p = await memory.pending(ws.info.id)
     if (p) {

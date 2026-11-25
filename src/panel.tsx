@@ -1,8 +1,9 @@
 // The sidebar: navigation and decisions. Content (diffs, conflict blocks) opens in the wide
 // review tab. One mode at a time, chosen by the repository state (docs/UX-PLAN.md):
-//   A Compare  – no merge running: pick a source, see what comes in, merge.
-//   B Resolve  – merge running with open conflicts: work through the files.
-//   C Finish   – merge running, nothing unresolved: commit or abort.
+//   A Compare  – nothing running: pick a source, see what comes in, then merge, rebase onto it
+//                or cherry-pick chosen commits (E9–E11).
+//   B Resolve  – a merge, rebase or cherry-pick stopped with open conflicts: work through the files.
+//   C Finish   – nothing unresolved: commit the merge, or continue / skip the rebase or cherry-pick.
 import {
   atom,
   Badge,
@@ -44,7 +45,9 @@ import { m } from './panel.messages.ts'
 import type {
   AgentActivity,
   Comparison,
+  MergeInProgress,
   MergeMode,
+  MergeOutcome,
   MergeWatch,
   Overview,
   RepoState,
@@ -54,7 +57,7 @@ import type {
 
 
 type Notice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; text: string } | null
-type Confirm = null | 'merge' | 'abort' | 'undo'
+type Confirm = null | 'merge' | 'rebase' | 'pick' | 'skip' | 'abort' | 'undo'
 
 const state = atom<RepoState | null>(null)
 const comparison = atom<Comparison | null>(null)
@@ -69,6 +72,8 @@ const note = atom('')
 const notePath = atom('')
 const watch = atom<MergeWatch | null>(null)
 const overview = atom<Overview | null>(null)
+/** E11: incoming commits chosen for a cherry-pick (row keys = full hashes); cleared with every comparison. */
+const picked = atom<string[]>([])
 /** What the person types as the project's test command, before saving; null = not edited. */
 const testDraft = atom<string | null>(null)
 /** Rows shown per long table; scrolling to the end shows the next page (large repositories). */
@@ -125,7 +130,7 @@ async function load(): Promise<void> {
   const wanted = read(source)
   const pick = st.sources.some((s) => s.ref === wanted) ? wanted : (st.suggestedSource ?? '')
   if (pick !== wanted) set(source, pick)
-  if (pick && (read(comparison)?.source !== pick || comparedHead !== st.head)) await compare(pick)
+  if (pick && (read(comparison)?.source !== pick || comparedHead !== st.head)) await compare(pick, true)
   void plugin.request('watch.get', {}).then((r) => set(watch, r.watch)).catch(() => {})
 }
 
@@ -134,10 +139,12 @@ async function loadOverview(gen: number): Promise<void> {
   if (gen === generation) set(overview, o)
 }
 
-async function compare(ref: string): Promise<void> {
+/** `quiet`: a reload compares again without clearing the notice (e.g. the result of a merge just made). */
+async function compare(ref: string, quiet = false): Promise<void> {
   set(source, ref)
   set(fileRows, PAGE)
   set(commitRows, PAGE)
+  set(picked, [])
   set(confirm, null)
   set(stale, false)
   if (!ref) {
@@ -145,22 +152,57 @@ async function compare(ref: string): Promise<void> {
     return
   }
   const head = read(state)?.head ?? null
-  const c = await run(m.comparing, () => plugin.request('repo.compare', { source: ref }))
+  const c = await run(m.comparing, () => plugin.request('repo.compare', { source: ref }), quiet)
   if (read(source) === ref) {
     set(comparison, c ?? null)
     comparedHead = c ? head : null
   }
 }
 
-async function doMerge(): Promise<void> {
+/** Uncommitted tracked changes are parked first (E7); `undefined` leaves the field out of the request. */
+const parkFlag = () => (read(state)?.dirtyFiles.length ?? 0) > 0 || undefined
+
+/** Starts a merge, rebase or cherry-pick; its outcome becomes the notice, then the panel reloads. */
+async function startOp(label: string, fn: () => Promise<MergeOutcome>): Promise<void> {
   set(confirm, null)
-  const park = (read(state)?.dirtyFiles.length ?? 0) > 0 || undefined
-  const out = await run(park ? m.parkingAndMerging : m.merging, () =>
-    plugin.request('merge.run', defined({ source: read(source), mode: read(mode), message: read(message) || undefined, park }))
-  )
+  const out = await run(label, fn)
   if (out) set(notice, { tone: out.status === 'conflicts' ? 'warning' : 'success', text: out.message })
   set(message, '')
+  set(picked, [])
   set(comparison, null)
+  await load()
+}
+
+function doMerge(): Promise<void> {
+  const park = parkFlag()
+  return startOp(park ? m.parkingAndMerging : m.merging, () =>
+    plugin.request('merge.run', defined({ source: read(source), mode: read(mode), message: read(message) || undefined, park }))
+  )
+}
+
+/** E9: rebases the current branch onto the chosen source. */
+function doRebase(): Promise<void> {
+  const park = parkFlag()
+  return startOp(park ? m.parkingAndRebasing : m.rebasing, () =>
+    plugin.request('rebase.run', defined({ source: read(source), park }))
+  )
+}
+
+/** E11: cherry-picks the chosen commits, oldest first (the worker sorts too). */
+function doPick(commits: string[]): Promise<void> {
+  const park = parkFlag()
+  return startOp(park ? m.parkingAndPicking : m.picking, () => plugin.request('pick.run', defined({ commits, park })))
+}
+
+/** Rebase / cherry-pick: next commit, or skip this one; a stop with conflicts is a warning. */
+async function stepOp(label: string, fn: () => Promise<MergeOutcome>): Promise<void> {
+  set(confirm, null)
+  const out = await run(label, fn)
+  if (out) {
+    set(notice, out.status === 'conflicts'
+      ? { tone: 'warning', text: m.nextCommitConflicts(out.conflicts.length) }
+      : { tone: 'success', text: out.message })
+  }
   await load()
 }
 
@@ -261,12 +303,44 @@ function sourceLabel(s: SourceOption): string {
   return `${s.label}${tag}`
 }
 
+/** ` · Commit 2 von 5 (abc123 Betreff)` for a rebase or cherry-pick; empty when Git tells nothing. */
+function stepLabel(op: MergeInProgress): string {
+  const s = op.step
+  if (!s) return op.kind === 'cherry-pick' && op.source ? m.stepCommit(op.source) : ''
+  return m.stepOf(s.current, s.total, [s.commit, s.subject].filter(Boolean).join(' '))
+}
+
+/** What runs, in words: the resolve mode's title. */
+function opTitle(op: MergeInProgress, branch: string | null): string {
+  switch (op.kind) {
+    case 'rebase':
+      return m.rebaseInProgress(op.branch ?? branch, op.source, stepLabel(op))
+    case 'cherry-pick':
+      return m.pickInProgress(stepLabel(op))
+    default:
+      return m.mergeInProgress(op.source, branch)
+  }
+}
+
+/** The texts that differ per operation (read at render time, so the language is current). */
+function opTexts(kind: MergeInProgress['kind']) {
+  switch (kind) {
+    case 'rebase':
+      return { running: m.rebaseRunning, abort: m.abortRebase, abortTitle: m.abortRebaseTitle, abortBody: m.abortRebaseBody, aborted: m.rebaseAborted }
+    case 'cherry-pick':
+      return { running: m.pickRunning, abort: m.abortPick, abortTitle: m.abortPickTitle, abortBody: m.abortPickBody, aborted: m.pickAborted }
+    default:
+      return { running: m.mergeRunning, abort: m.abortMerge, abortTitle: m.abortTitle, abortBody: m.abortBody, aborted: m.mergeAborted }
+  }
+}
+
 function Header({ st }: { st: RepoState }) {
   const dirty = st.dirtyFiles.length
   return (
     <Row justify="between" align="center">
       <Stack gap="none">
-        <Heading level={2}>{st.branch ?? m.detachedHead}</Heading>
+        {/* During a rebase HEAD is detached; the branch being rebased is the one that matters. */}
+        <Heading level={2}>{st.branch ?? st.merge?.branch ?? m.detachedHead}</Heading>
         {st.workspace && st.workspace.name !== st.branch ? (
           <Text muted size="xs" truncate>
             {st.workspace.name}
@@ -275,7 +349,7 @@ function Header({ st }: { st: RepoState }) {
       </Stack>
       <Row gap="xs" align="center">
         {st.merge ? (
-          <Badge tone="warning">{m.mergeRunning}</Badge>
+          <Badge tone="warning">{opTexts(st.merge.kind).running}</Badge>
         ) : dirty ? (
           <Badge tone="warning">{m.changedCount(dirty)}</Badge>
         ) : (
@@ -627,6 +701,12 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
     : st.parked
       ? m.blockedParked
       : null
+  // Only commits of this comparison count (a selection never outlives it, see `compare`).
+  const sel = new Set(read(picked))
+  const chosen = c.incoming.filter((x) => sel.has(x.hash))
+  // E9: rebasing needs a branch (c.rebase is null when detached) and something new on the source.
+  const rebaseBlocked = blockedBy ?? (!c.rebase ? m.blockedDetached : c.ahead === 0 ? m.rebaseNothing(src) : null)
+  const pushed = c.rebase?.pushed ?? 0
   return (
     <Stack gap="sm">
       <Button icon="open-external" variant="outline" onPress={() => void openTab({ view: 'overview', source: src })}>
@@ -634,22 +714,65 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
       </Button>
 
       <Collapsible title={c.ahead > c.incoming.length ? m.commitsTitleLatest(c.incoming.length, c.ahead) : m.commitsTitle(c.ahead)}>
-        <Table
-          label={m.incomingCommits}
-          maxHeight="md"
-          emptyText={m.none}
-          columns={[
-            { key: 'short', label: m.colCommit, width: 'xs' },
-            { key: 'subject', label: m.colMessage },
-            { key: 'at', label: m.colWhen, width: 'sm', hideBelow: 'sm' }
-          ]}
-          hasMore={c.incoming.length > read(commitRows)}
-          onLoadMore={() => set(commitRows, read(commitRows) + PAGE)}
-          rows={c.incoming.slice(0, read(commitRows)).map((x) => ({
-            key: x.hash,
-            cells: { short: x.short, subject: x.subject, at: { type: 'relative', at: x.at, format: 'short' } }
-          }))}
-        />
+        <Stack gap="sm">
+          <Table
+            label={m.incomingCommits}
+            maxHeight="md"
+            emptyText={m.none}
+            columns={[
+              { key: 'short', label: m.colCommit, width: 'xs' },
+              { key: 'subject', label: m.colMessage },
+              { key: 'at', label: m.colWhen, width: 'sm', hideBelow: 'sm' }
+            ]}
+            selectionMode="multiple"
+            selected={chosen.map((x) => x.hash)}
+            onSelectionChange={({ keys }) => {
+              set(picked, keys)
+              if (read(confirm) === 'pick') set(confirm, null)
+            }}
+            hasMore={c.incoming.length > read(commitRows)}
+            onLoadMore={() => set(commitRows, read(commitRows) + PAGE)}
+            rows={c.incoming.slice(0, read(commitRows)).map((x) => ({
+              key: x.hash,
+              cells: { short: x.short, subject: x.subject, at: { type: 'relative', at: x.at, format: 'short' } }
+            }))}
+          />
+          {chosen.length ? (
+            conf === 'pick' ? (
+              <Callout tone="accent" title={m.confirmPickTitle(chosen.length, st.branch)}>
+                <Stack gap="xs">
+                  <Text size="xs">
+                    {m.confirmPickBody(
+                      chosen.slice(0, 6).map((x) => x.short).join(', ') + (chosen.length > 6 ? ` … (+${chosen.length - 6})` : ''),
+                      st.branch,
+                      opt?.agent === 'working'
+                    )}
+                  </Text>
+                  {dirty ? <Text size="xs" tone="warning">{m.confirmParkNotePick(dirty)}</Text> : null}
+                  <Row gap="xs">
+                    {/* `incoming` is newest first: send them oldest first, the order they get applied. */}
+                    <Button tone="accent" onPress={() => void doPick(chosen.map((x) => x.hash).reverse())}>
+                      {m.yesPick(dirty > 0)}
+                    </Button>
+                    <Button variant="ghost" onPress={() => set(confirm, null)}>
+                      {m.cancel}
+                    </Button>
+                  </Row>
+                </Stack>
+              </Callout>
+            ) : (
+              <Button
+                variant="outline"
+                icon="check"
+                disabled={!!blockedBy || working}
+                tooltip={blockedBy ?? undefined}
+                onPress={() => set(confirm, 'pick')}
+              >
+                {dirty ? m.parkAndPick(chosen.length) : m.pickCommits(chosen.length)}
+              </Button>
+            )
+          ) : null}
+        </Stack>
       </Collapsible>
 
       <Collapsible title={m.filesTitle(c.files.length)} defaultOpen>
@@ -771,6 +894,38 @@ function Details({ st, c, src, opt }: { st: RepoState; c: Comparison; src: strin
           {dirty ? m.parkAndMerge(src) : m.mergeInto(src, st.branch)}
         </Button>
       )}
+
+      {conf === 'rebase' && c.rebase ? (
+        <Callout tone={pushed ? 'warning' : 'accent'} title={m.confirmRebaseTitle(st.branch, src)}>
+          <Stack gap="xs">
+            <Text size="xs">{m.confirmRebaseSummary(c.rebase.commits, st.branch, src, opt?.agent === 'working')}</Text>
+            {pushed ? (
+              <Text size="xs" tone="warning">
+                {m.confirmRebasePushed(pushed, c.rebase.upstream)}
+              </Text>
+            ) : null}
+            {dirty ? <Text size="xs" tone="warning">{m.confirmParkNoteRebase(dirty)}</Text> : null}
+            <Row gap="xs">
+              <Button tone={pushed ? 'danger' : 'accent'} onPress={() => void doRebase()}>
+                {m.yesRebase(dirty > 0, pushed > 0)}
+              </Button>
+              <Button variant="ghost" onPress={() => set(confirm, null)}>
+                {m.cancel}
+              </Button>
+            </Row>
+          </Stack>
+        </Callout>
+      ) : (
+        <Button
+          variant="outline"
+          icon="refresh"
+          disabled={!!rebaseBlocked || working}
+          tooltip={rebaseBlocked ?? undefined}
+          onPress={() => set(confirm, 'rebase')}
+        >
+          {dirty ? m.parkAndRebase(src) : m.rebaseOnto(src)}
+        </Button>
+      )}
     </Stack>
   )
 }
@@ -875,16 +1030,25 @@ function ModeResolve({ st }: { st: RepoState }) {
   const total = mg.conflicts.length
   const conf = read(confirm)
   const finished = total === 0
+  const isMerge = mg.kind === 'merge'
+  const texts = opTexts(mg.kind)
 
   return (
     <Stack gap="md">
-      <Callout
-        tone={finished ? 'success' : 'warning'}
-        icon={finished ? 'check' : 'warning'}
-        title={finished ? m.allResolved : m.mergeInProgress(mg.source, st.branch)}
-      >
-        {finished ? m.reviewAndFinish : m.stillWithMarkers(open.length, total)}
-      </Callout>
+      {isMerge ? (
+        <Callout
+          tone={finished ? 'success' : 'warning'}
+          icon={finished ? 'check' : 'warning'}
+          title={finished ? m.allResolved : m.mergeInProgress(mg.source, st.branch)}
+        >
+          {finished ? m.reviewAndFinish : m.stillWithMarkers(open.length, total)}
+        </Callout>
+      ) : (
+        // A rebase or cherry-pick goes commit by commit: the title always says which one.
+        <Callout tone={finished ? 'success' : 'warning'} icon={finished ? 'check' : 'warning'} title={opTitle(mg, st.branch)}>
+          {finished ? m.stepResolved : m.stillWithMarkers(open.length, total)}
+        </Callout>
+      )}
 
       {!finished ? (
         <Stack gap="sm">
@@ -937,7 +1101,7 @@ function ModeResolve({ st }: { st: RepoState }) {
             </Button>
           </Row>
         </Stack>
-      ) : (
+      ) : isMerge ? (
         <Stack gap="sm">
           <Input label={m.commitMessage} value={read(message)} placeholder={m.commitMessagePrepared} onChange={(v) => set(message, v)} />
           <Button
@@ -950,15 +1114,18 @@ function ModeResolve({ st }: { st: RepoState }) {
             {m.completeMerge}
           </Button>
         </Stack>
-      )}
+      ) : null}
+
+      {isMerge ? null : <StepActions op={mg} finished={finished} />}
 
       <Separator />
       {conf === 'abort' ? (
-        <Callout tone="danger" title={m.abortTitle}>
+        <Callout tone="danger" title={texts.abortTitle}>
           <Stack gap="xs">
-            <Text size="xs">{m.abortBody}</Text>
+            <Text size="xs">{texts.abortBody}</Text>
             <Row gap="xs">
-              <Button tone="danger" onPress={() => act(m.aborting, () => plugin.request('merge.abort', {}), m.mergeAborted)}>
+              {/* merge.abort aborts whatever runs: merge, rebase or cherry-pick. */}
+              <Button tone="danger" onPress={() => act(m.aborting, () => plugin.request('merge.abort', {}), texts.aborted)}>
                 {m.yesAbort}
               </Button>
               <Button variant="ghost" onPress={() => set(confirm, null)}>
@@ -969,10 +1136,49 @@ function ModeResolve({ st }: { st: RepoState }) {
         </Callout>
       ) : (
         <Button variant="ghost" tone="danger" icon="close" onPress={() => set(confirm, 'abort')}>
-          {m.abortMerge}
+          {texts.abort}
         </Button>
       )}
     </Stack>
+  )
+}
+
+/** Rebase / cherry-pick: "Weiter" once nothing is unmerged, "Commit überspringen" after a confirmation. */
+function StepActions({ op, finished }: { op: MergeInProgress; finished: boolean }) {
+  const working = !!read(busy)
+  if (read(confirm) === 'skip') {
+    const name = op.step?.commit ?? (op.kind === 'cherry-pick' && op.source ? op.source : m.thisCommit)
+    return (
+      <Callout tone="warning" title={m.skipTitle(name)}>
+        <Stack gap="xs">
+          <Text size="xs">{m.skipBody}</Text>
+          <Row gap="xs">
+            <Button tone="danger" onPress={() => void stepOp(m.skipping, () => plugin.request('op.skip', {}))}>
+              {m.yesSkip}
+            </Button>
+            <Button variant="ghost" onPress={() => set(confirm, null)}>
+              {m.undoNo}
+            </Button>
+          </Row>
+        </Stack>
+      </Callout>
+    )
+  }
+  return (
+    <Row gap="xs" wrap>
+      <Button
+        tone="accent"
+        icon="check"
+        disabled={!finished || working}
+        tooltip={finished ? undefined : m.continueBlocked}
+        onPress={() => void stepOp(m.continuing, () => plugin.request('op.continue', {}))}
+      >
+        {m.continueOp}
+      </Button>
+      <Button variant="outline" icon="next" disabled={working} onPress={() => set(confirm, 'skip')}>
+        {m.skipCommit}
+      </Button>
+    </Row>
   )
 }
 

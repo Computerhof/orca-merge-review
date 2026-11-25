@@ -5,6 +5,11 @@
 // Texts that come from the Git side (refusals of core/repo.ts, agent prompts) live in core/messages.ts.
 import { messages, plural } from '../i18n/index.ts'
 
+/** Rebase and cherry-pick in the status bar, per language (plain data). */
+const DE_STEP = { rebase: 'Rebase', 'cherry-pick': 'Cherry-Pick' } as const
+const EN_STEP = { rebase: 'Rebase', 'cherry-pick': 'Cherry-pick' } as const
+type StepKind = keyof typeof DE_STEP
+
 export const m = messages({
   de: {
     // ---- worker.ts: notification and command palette results
@@ -22,6 +27,8 @@ export const m = messages({
     parkedConflict: ' Beim Zurückholen deiner geparkten Änderungen gab es Konflikte; sie liegen weiter im Stash.',
     parkedStillThere: 'Es liegen noch geparkte Änderungen von einem früheren Merge im Stash. Erst zurückholen.',
     stashMessage: (source: string) => `Merge & Review: geparkt vor dem Merge von ${source}`,
+    stashBeforeRebase: (onto: string) => `Merge & Review: geparkt vor dem Rebase auf ${onto}`,
+    stashBeforePick: (commits: string) => `Merge & Review: geparkt vor dem Cherry-Pick von ${commits}`,
     parkedReturnLater: (message: string) => `${message} Deine geparkten Änderungen kommen nach dem Abschluss oder Abbruch zurück.`,
     noParked: 'Es gibt keine geparkten Änderungen.',
     finishMergeFirst: 'Erst den laufenden Merge abschließen oder abbrechen.',
@@ -76,7 +83,13 @@ export const m = messages({
     statusJobTooltip: (message: string) => `${message} Details im Panel Merge & Review.`,
     statusMergeReady: 'Merge bereit zum Abschließen',
     statusConflictsOpen: (n: number) => `Merge: ${n} ${n === 1 ? 'Konflikt' : 'Konflikte'} offen`,
-    statusMergeTooltip: (source: string) => `Merge von ${source} läuft. Klicken öffnet Merge & Review.`
+    statusMergeTooltip: (source: string) => `Merge von ${source} läuft. Klicken öffnet Merge & Review.`,
+    // `step` is " 2/5" or empty when Git does not tell.
+    statusStepConflicts: (kind: StepKind, step: string, n: number) =>
+      `${DE_STEP[kind]}${step}: ${n} ${n === 1 ? 'Konflikt' : 'Konflikte'} offen`,
+    statusStepReady: (kind: StepKind, step: string) => `${DE_STEP[kind]}${step}: bereit zum Fortsetzen`,
+    statusStepTooltip: (kind: StepKind, source: string) =>
+      `${DE_STEP[kind]} ${kind === 'rebase' ? 'auf' : 'von'} ${source} läuft. Klicken öffnet Merge & Review.`
   },
   en: {
     // ---- worker.ts
@@ -94,6 +107,8 @@ export const m = messages({
     parkedConflict: ' Restoring your parked changes caused conflicts; they stay in the stash.',
     parkedStillThere: 'Changes parked for an earlier merge are still in the stash. Restore them first.',
     stashMessage: (source: string) => `Merge & Review: parked before merging ${source}`,
+    stashBeforeRebase: (onto: string) => `Merge & Review: parked before rebasing onto ${onto}`,
+    stashBeforePick: (commits: string) => `Merge & Review: parked before cherry-picking ${commits}`,
     parkedReturnLater: (message: string) => `${message} Your parked changes come back after the merge is finished or aborted.`,
     noParked: 'There are no parked changes.',
     finishMergeFirst: 'Finish or abort the merge in progress first.',
@@ -148,6 +163,10 @@ export const m = messages({
     statusJobTooltip: (message: string) => `${message} Details in the Merge & Review panel.`,
     statusMergeReady: 'Merge ready to finish',
     statusConflictsOpen: (n: number) => `Merge: ${plural(n, 'conflict', 'conflicts')} open`,
-    statusMergeTooltip: (source: string) => `Merge of ${source} in progress. Click to open Merge & Review.`
+    statusMergeTooltip: (source: string) => `Merge of ${source} in progress. Click to open Merge & Review.`,
+    statusStepConflicts: (kind: StepKind, step: string, n: number) => `${EN_STEP[kind]}${step}: ${plural(n, 'conflict', 'conflicts')} open`,
+    statusStepReady: (kind: StepKind, step: string) => `${EN_STEP[kind]}${step}: ready to continue`,
+    statusStepTooltip: (kind: StepKind, source: string) =>
+      `${EN_STEP[kind]} ${kind === 'rebase' ? 'onto' : 'of'} ${source} in progress. Click to open Merge & Review.`
   }
 })

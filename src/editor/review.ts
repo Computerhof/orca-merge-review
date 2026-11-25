@@ -12,6 +12,7 @@ import type {
   ConflictChoice,
   ConflictFile,
   ConflictHunk,
+  MergeInProgress,
   RepoState,
   ReviewTicket,
   SourceOption
@@ -204,7 +205,14 @@ async function takeFile(side: 'ours' | 'theirs'): Promise<void> {
   if (!selected || busy) return
   const ok = await call(() => orca.plugin.request('conflict.takeFile', { ...ws(), path: selected!, side }))
   if (!ok) return
-  message = { tone: 'ok', text: side === 'ours' ? m.tookOurs(selected) : m.tookTheirs(selected) }
+  const op = repo?.merge
+  message = {
+    tone: 'ok',
+    text:
+      op?.kind === 'rebase'
+        ? side === 'ours' ? m.tookBase(selected, op.sides.ours) : m.tookCommit(selected)
+        : side === 'ours' ? m.tookOurs(selected) : m.tookTheirs(selected)
+  }
   selected = null
   await reload()
 }
@@ -228,10 +236,49 @@ function render(): void {
   root.replaceChildren(header(), body(), footer())
 }
 
+/** ` · Commit 2 von 5 (abc123 Betreff)` for a rebase or cherry-pick; empty when Git tells nothing. */
+function stepLabel(op: MergeInProgress): string {
+  const s = op.step
+  if (!s) return op.kind === 'cherry-pick' && op.source ? m.stepCommit(op.source) : ''
+  return m.stepOf(s.current, s.total, [s.commit, s.subject].filter(Boolean).join(' '))
+}
+
+function opTitle(op: MergeInProgress, branch: string): string {
+  switch (op.kind) {
+    case 'rebase':
+      return m.rebaseTitle(op.branch ?? repo?.branch ?? null, op.source, stepLabel(op))
+    case 'cherry-pick':
+      return m.pickTitle(stepLabel(op))
+    default:
+      return `Merge ${op.source} → ${branch}`
+  }
+}
+
+/**
+ * Names for the two sides of a conflict, from the worker (already the right way round). During a
+ * rebase Git's "ours" is the new base and "theirs" the branch's own commit being replayed, so they
+ * are not "your side" / "incoming" there.
+ */
+function sideNames(op: MergeInProgress) {
+  const { ours, theirs } = op.sides
+  const rebase = op.kind === 'rebase'
+  return {
+    ours,
+    theirs,
+    oursLabel: rebase ? m.rebaseBaseSide(ours) : m.yourSide(ours),
+    theirsLabel: rebase ? m.rebaseCommitSide(theirs) : m.incomingSide(theirs),
+    oursButton: rebase ? m.rebaseMine : m.mine,
+    theirsButton: rebase ? m.rebaseTheirs : m.incoming
+  }
+}
+
+/** A commit subject can be long; buttons get a short form, the full text stays in the tooltip. */
+const short = (s: string, max = 48) => (s.length > max ? s.slice(0, max - 1) + '…' : s)
+
 function header(): HTMLElement {
   const branch = repo?.branch ?? '…'
   const title = repo?.merge
-    ? `Merge ${repo.merge.source} → ${branch}`
+    ? opTitle(repo.merge, branch)
     : cmp
       ? `${cmp.source} → ${branch}`
       : `Merge & Review · ${branch}`
@@ -275,7 +322,7 @@ function badge(): HTMLElement | null {
     const open = repo.merge.conflicts.length - repo.merge.markerFree.length
     return open
       ? el('span', { class: 'badge warn' }, m.openCount(open))
-      : el('span', { class: 'badge ok' }, m.readyToFinish)
+      : el('span', { class: 'badge ok' }, repo.merge.kind === 'merge' ? m.readyToFinish : m.readyToContinue)
   }
   if (!cmp) return null
   const p = cmp.preview
@@ -342,7 +389,7 @@ function buildSidebar(items: Map<string, HTMLElement>): HTMLElement {
       list.append(fileItem(items, f, ready.has(f) ? '✓' : '⚠', ready.has(f) ? 'ok' : 'warn'))
     }
     showMore(mg.conflicts.length, m.showMoreConflicts)
-    if (!mg.conflicts.length) list.append(el('div', { class: 'muted pad' }, m.allResolved))
+    if (!mg.conflicts.length) list.append(el('div', { class: 'muted pad' }, mg.kind === 'merge' ? m.allResolved : m.allResolvedStep))
     return list
   }
   if (!cmp) {
@@ -376,7 +423,7 @@ function fileItem(items: Map<string, HTMLElement>, path: string, mark: string, t
 }
 
 function content(): HTMLElement | null {
-  if (repo?.merge) return conflict ? conflictView(conflict) : el('div', { class: 'empty' }, m.pickFile)
+  if (repo?.merge) return conflict ? conflictView(conflict, repo.merge) : el('div', { class: 'empty' }, m.pickFile)
   if (!cmp) return el('div', { class: 'empty' }, m.pickSourceInPanel)
   if (!selected) return el('div', { class: 'empty' }, m.noChanges)
   return diffView()
@@ -473,10 +520,10 @@ function noteBox(path: string, toAgent: boolean): { node: HTMLElement; prefill: 
 
 // ---- conflicts
 
-function conflictView(file: ConflictFile): HTMLElement {
+function conflictView(file: ConflictFile, op: MergeInProgress): HTMLElement {
   const box = el('div', { class: 'conflict' })
-  const ours = repo?.branch ?? 'HEAD'
-  const theirs = repo?.merge?.source ?? m.incomingFallback
+  const sides = sideNames(op)
+  const { ours, theirs } = sides
   box.append(
     el(
       'div',
@@ -484,8 +531,8 @@ function conflictView(file: ConflictFile): HTMLElement {
       el('strong', {}, file.path),
       el('div', { class: 'spacer' }),
       button(m.editInEditor, () => void call(() => orca.plugin.request('conflict.openInEditor', { ...ws(), path: file.path }))),
-      button(m.wholeFile(ours), () => void takeFile('ours')),
-      button(m.wholeFile(theirs), () => void takeFile('theirs')),
+      button(m.wholeFile(short(ours)), () => void takeFile('ours'), 'plain', sides.oursLabel),
+      button(m.wholeFile(short(theirs)), () => void takeFile('theirs'), 'plain', sides.theirsLabel),
       button(m.markResolved, () => void markResolved(), file.markerFree ? 'primary' : 'plain', file.markerFree ? '' : m.markResolvedTip)
     )
   )
@@ -501,11 +548,11 @@ function conflictView(file: ConflictFile): HTMLElement {
     box.append(el('div', { class: 'notice ok' }, m.noMarkersLeftReview))
     return box
   }
-  file.hunks.forEach((h) => box.append(hunkCard(h, file.hunks.length, ours, theirs)))
+  file.hunks.forEach((h) => box.append(hunkCard(h, file.hunks.length, sides)))
   return box
 }
 
-function hunkCard(h: ConflictHunk, total: number, ours: string, theirs: string): HTMLElement {
+function hunkCard(h: ConflictHunk, total: number, sides: ReturnType<typeof sideNames>): HTMLElement {
   const side = (label: string, body: string, cls: string) =>
     el('div', { class: `side ${cls}` }, el('div', { class: 'label' }, label), el('pre', {}, body || m.emptySide))
   return el(
@@ -515,15 +562,15 @@ function hunkCard(h: ConflictHunk, total: number, ours: string, theirs: string):
     el(
       'div',
       { class: `sides ${h.base !== null ? 'three' : ''}` },
-      side(m.yourSide(ours), h.ours, 'ours'),
+      side(sides.oursLabel, h.ours, 'ours'),
       h.base !== null ? side(m.commonBase, h.base, 'base') : null,
-      side(m.incomingSide(theirs), h.theirs, 'theirs')
+      side(sides.theirsLabel, h.theirs, 'theirs')
     ),
     el(
       'div',
       { class: 'row' },
-      button(m.mine, () => void resolve(h, 'ours')),
-      button(m.incoming, () => void resolve(h, 'theirs')),
+      button(sides.oursButton, () => void resolve(h, 'ours')),
+      button(sides.theirsButton, () => void resolve(h, 'theirs')),
       button(m.both, () => void resolve(h, 'both')),
       h.base !== null ? button(m.base, () => void resolve(h, 'base')) : null
     )

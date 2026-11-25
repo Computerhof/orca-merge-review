@@ -33,8 +33,20 @@ const comparison: Comparison = {
   ahead: 1,
   behind: 1,
   files: [{ path: 'a.txt', status: 'M', added: 1, deleted: 1 }],
-  preview: { clean: false, conflicts: ['a.txt'], upToDate: false, fastForward: false }
+  preview: { clean: false, conflicts: ['a.txt'], upToDate: false, fastForward: false },
+  rebase: null
 }
+
+/** A merge stopped with conflicts, as the worker reports it. */
+const mergeOp = (conflicts: string[], markerFree: string[]): RepoState['merge'] => ({
+  kind: 'merge',
+  source: 'feature',
+  conflicts,
+  markerFree,
+  step: null,
+  sides: { ours: 'main', theirs: 'feature' },
+  branch: null
+})
 
 test('compare mode: prediction, warning about a working agent, merge needs a second press', async () => {
   const runs: unknown[] = []
@@ -296,7 +308,7 @@ test('resolve mode lists conflicts; abort needs confirmation', async () => {
   const host = mockHost({
     capabilities: CAPS,
     requests: {
-      'repo.state': () => ({ ...base, merge: { source: 'feature', conflicts: ['a.txt', 'b.txt'], markerFree: ['b.txt'] } }),
+      'repo.state': () => ({ ...base, merge: mergeOp(['a.txt', 'b.txt'], ['b.txt']) }),
       'merge.abort': () => {
         aborts.push(1)
         return { ok: true }
@@ -317,7 +329,7 @@ test('resolve mode lists conflicts; abort needs confirmation', async () => {
 test('finish mode when nothing is unresolved', async () => {
   const host = mockHost({
     capabilities: CAPS,
-    requests: { 'repo.state': () => ({ ...base, merge: { source: 'feature', conflicts: [], markerFree: [] } }) }
+    requests: { 'repo.state': () => ({ ...base, merge: mergeOp([], []) }) }
   })
   const view = await mount(panel, { host, locale: 'de-DE' })
   await view.settled()
@@ -341,5 +353,229 @@ test('English UI: the panel speaks English when Orca runs in English', async () 
   assert.match(view.summary().join('\n'), /1 conflicting file expected/)
   assert.deepEqual(view.refusals, [])
   assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+// ------------------------------------------------------------------ rebase and cherry-pick (E9–E12)
+
+/** The panel on a feature branch, its base `main` chosen as the source. */
+const onFeature: RepoState = {
+  ...base,
+  branch: 'feature',
+  sources: [{ ref: 'main', label: 'main', kind: 'branch', isBase: true }],
+  suggestedSource: 'main'
+}
+
+test('E9/E10: rebase onto the source names the rewritten and pushed commits and needs a second press', async () => {
+  const runs: unknown[] = []
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => onFeature,
+      'repo.compare': () => ({ ...comparison, source: 'main', rebase: { commits: 3, pushed: 2, upstream: 'origin/feature' } }),
+      'watch.get': () => ({ watch: null }),
+      'rebase.run': (input) => {
+        runs.push(input)
+        return { status: 'rebased', message: 'feature auf main aktualisiert.', conflicts: [] }
+      }
+    }
+  })
+  const view = await mount(panel, { host, locale: 'de-DE' })
+  await view.settled()
+  await view.press({ text: 'Auf main aktualisieren (Rebase)' })
+  assert.equal(runs.length, 0, 'first press only asks')
+  const text = view.summary().join('\n') + JSON.stringify(view.tree())
+  assert.match(text, /feature auf main aktualisieren\?/)
+  assert.match(text, /3 Commit\(s\) von feature werden neu geschrieben/)
+  assert.match(text, /2 davon schon gepusht \(auf origin\/feature\): danach ist ein Force-Push nötig; Merge & Review pusht nie\./)
+  await view.press({ text: 'Ja, trotzdem aktualisieren' })
+  await view.settled()
+  assert.deepEqual(runs, [{ source: 'main' }])
+  assert.match(view.summary().join('\n'), /feature auf main aktualisiert\./)
+  assert.deepEqual(view.refusals, [])
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('E9: rebase is disabled on a detached HEAD and when the source brings nothing new', async () => {
+  const detached = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => onFeature,
+      'repo.compare': () => ({ ...comparison, source: 'main', rebase: null }),
+      'watch.get': () => ({ watch: null })
+    }
+  })
+  let view = await mount(panel, { host: detached, locale: 'de-DE' })
+  await view.settled()
+  assert.equal(view.find({ text: 'Auf main aktualisieren (Rebase)' })?.disabled, true)
+  await view.unmount()
+
+  const nothingNew = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => onFeature,
+      'repo.compare': () => ({ ...comparison, source: 'main', ahead: 0, rebase: { commits: 1, pushed: 0, upstream: null } }),
+      'watch.get': () => ({ watch: null })
+    }
+  })
+  view = await mount(panel, { host: nothingNew, locale: 'de-DE' })
+  await view.settled()
+  assert.equal(view.find({ text: 'Auf main aktualisieren (Rebase)' })?.disabled, true)
+  await view.unmount()
+})
+
+test('E11: chosen incoming commits are cherry-picked oldest first after a confirmation', async () => {
+  const picks: unknown[] = []
+  const two: Comparison = {
+    ...comparison,
+    ahead: 2,
+    incoming: [
+      { hash: 'h2full', short: 'h2', subject: 'feature: zwei', author: 'T', at: 0 },
+      { hash: 'h1full', short: 'h1', subject: 'feature: eins', author: 'T', at: 0 }
+    ]
+  }
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => base,
+      'repo.compare': () => two,
+      'watch.get': () => ({ watch: null }),
+      'pick.run': (input) => {
+        picks.push(input)
+        return { status: 'picked', message: '2 Commit(s) übernommen.', conflicts: [] }
+      }
+    }
+  })
+  const view = await mount(panel, { host, locale: 'de-DE' })
+  await view.settled()
+  await view.toggle({ label: 'Commits (2)' })
+  assert.equal(view.find({ text: /Commit\(s\) übernehmen \(Cherry-Pick\)/ }), null, 'no button without a selection')
+  await view.selectRows({ label: 'Eingehende Commits' }, ['h2full', 'h1full'])
+  await view.press({ text: '2 Commit(s) übernehmen (Cherry-Pick)' })
+  assert.equal(picks.length, 0, 'first press only asks')
+  const text = view.summary().join('\n') + JSON.stringify(view.tree())
+  assert.match(text, /2 Commit\(s\) auf main übernehmen\?/)
+  assert.match(text, /h2, h1 werden in Historien-Reihenfolge auf main angewendet, mit Herkunftsvermerk \(-x\)\./)
+  await view.press({ text: 'Ja, übernehmen' })
+  await view.settled()
+  assert.deepEqual(picks, [{ commits: ['h1full', 'h2full'] }])
+  assert.match(view.summary().join('\n'), /2 Commit\(s\) übernommen\./)
+  assert.deepEqual(view.refusals, [])
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('resolve mode for a rebase: step in the title, "Weiter" only without open conflicts, skip is confirmed', async () => {
+  let conflicts = ['a.txt']
+  const continues: unknown[] = []
+  const skips: unknown[] = []
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => ({
+        ...onFeature,
+        branch: null,
+        merge: {
+          kind: 'rebase',
+          source: 'main',
+          conflicts,
+          markerFree: [],
+          step: { current: 2, total: 5, commit: 'abc123', subject: 'Login prüfen' },
+          sides: { ours: 'main', theirs: 'abc123 Login prüfen' },
+          branch: 'feature'
+        }
+      }),
+      'op.continue': (input) => {
+        continues.push(input)
+        return { status: 'conflicts', message: 'Konflikte.', conflicts: ['b.txt'] }
+      },
+      'op.skip': (input) => {
+        skips.push(input)
+        return { status: 'rebased', message: 'feature auf main aktualisiert.', conflicts: [] }
+      }
+    }
+  })
+  const view = await mount(panel, { host, locale: 'de-DE' })
+  await view.settled()
+  const text = view.summary().join('\n') + JSON.stringify(view.tree())
+  assert.match(text, /Rebase von feature auf main läuft · Commit 2 von 5 \(abc123 Login prüfen\)/)
+  assert.match(text, /Rebase läuft/)
+  assert.ok(view.find({ text: 'Rebase abbrechen' }))
+  assert.equal(view.find({ text: 'Merge abschließen' }), null)
+  assert.equal(view.find({ text: 'Weiter' })?.disabled, true)
+
+  conflicts = []
+  await view.press({ label: 'Neu laden' })
+  await view.settled()
+  assert.equal(view.find({ text: 'Weiter' })?.disabled, false)
+  await view.press({ text: 'Weiter' })
+  await view.settled()
+  assert.deepEqual(continues, [{}])
+  assert.match(view.summary().join('\n'), /Der nächste Commit hat Konflikte in 1 Datei\(en\)/)
+
+  await view.press({ text: 'Commit überspringen' })
+  assert.equal(skips.length, 0, 'first press only asks')
+  assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /abc123 überspringen\?/)
+  await view.press({ text: 'Ja, überspringen' })
+  await view.settled()
+  assert.deepEqual(skips, [{}])
+  assert.match(view.summary().join('\n'), /feature auf main aktualisiert\./)
+  assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('resolve mode for a cherry-pick: title and abort say what runs', async () => {
+  const aborts: unknown[] = []
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => ({
+        ...base,
+        merge: {
+          kind: 'cherry-pick',
+          source: 'def456',
+          conflicts: ['a.txt'],
+          markerFree: [],
+          step: { current: 1, total: 2, commit: 'def456', subject: 'Fix' },
+          sides: { ours: 'main', theirs: 'def456 Fix' },
+          branch: null
+        }
+      }),
+      'merge.abort': () => {
+        aborts.push(1)
+        return { ok: true }
+      }
+    }
+  })
+  const view = await mount(panel, { host, locale: 'de-DE' })
+  await view.settled()
+  assert.match(view.summary().join('\n'), /Cherry-Pick läuft · Commit 1 von 2 \(def456 Fix\)/)
+  await view.press({ text: 'Cherry-Pick abbrechen' })
+  assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /Cherry-Pick wirklich abbrechen\?/)
+  await view.press({ text: 'Ja, abbrechen' })
+  await view.settled()
+  assert.equal(aborts.length, 1)
+  assert.match(view.summary().join('\n'), /Cherry-Pick abgebrochen\./)
+  await view.unmount()
+})
+
+test('English UI: the rebase button', async () => {
+  const host = mockHost({
+    capabilities: CAPS,
+    requests: {
+      'repo.state': () => onFeature,
+      'repo.compare': () => ({ ...comparison, source: 'main', rebase: { commits: 1, pushed: 0, upstream: null } }),
+      'watch.get': () => ({ watch: null })
+    }
+  })
+  const view = await mount(panel, { host, locale: 'en-US' })
+  await view.settled()
+  const button = view.find({ text: 'Update onto main (rebase)' })
+  assert.ok(button)
+  assert.equal(button.disabled, false)
+  await view.press({ text: 'Update onto main (rebase)' })
+  assert.match(view.summary().join('\n') + JSON.stringify(view.tree()), /1 commit of feature will be rewritten/)
+  assert.ok(view.find({ text: 'Yes, update' }))
   await view.unmount()
 })
