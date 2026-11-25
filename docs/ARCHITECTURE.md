@@ -15,6 +15,7 @@ src/
     prompts.ts          Texte für Agenten (Review-Anmerkung, Konfliktauftrag, Merge-Wächter, Merge-Hinweis)
     reviewExport.ts     Review als Markdown (Vergleich, Commits, Dateien, Notizen)
     readiness.ts        K10: Wie bereit ist ein Workspace? (Sortierung, Beschriftung)
+    launchPrompt.ts     Hat ein gestarteter Agent angefangen? (Status „working“, Frist 30 s)
     testDetect.ts       Testbefehl aus den Projektdateien vorschlagen (nur Vorschlag)
   run/                  ── kennt Orca nicht; läuft in CI ──
     command.ts          Testbefehl ausführen: Exit-Code, letzte Zeilen, Zeitlimit, Abbruch (ganzer Prozessbaum)
@@ -29,7 +30,7 @@ src/
     handlers.ts         Request-Handler (dünn, UserError → Meldung im Panel)
     monitor.ts          Merge-Zustand pro Workspace (Cache für Hook und Status-Leiste)
     reviewTab.ts        Hilfsdatei schreiben + editor.open
-    agents.ts           Anmerkung zustellen (laufend → fortsetzen → neu), Warteschlange
+    agents.ts           Anmerkung zustellen (laufend → fortsetzen → neu), Warteschlange, Agent ohne Start-Prompt melden
     watch.ts            Merge-Wächter als Orca-Automation
     circles.ts          K13 Speichern = gelöst, K14 Merge-Hinweis im Prompt, K15 Zum Agenten
     overview.ts         K10: alle Workspaces des Projekts gegen die Base (gecacht pro Commit-Paar)

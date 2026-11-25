@@ -7,6 +7,25 @@ oder einer Capability-Erweiterung, die Nutzer neu freigeben müssen.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-25
+
+### Behoben
+- **Agent ohne Auftrag wird sichtbar:** Startet das Plugin einen Agenten („Agent löst Konflikte“, „Agent repariert“,
+  neue Anmerkung), schickte Orca 1.4.273 den Prompt nicht ab, wenn Claude Code im Auto-Modus statt Bypass startete;
+  der Agent wartete leer. Der Worker achtet jetzt auf Orcas Statusmeldung: Hat der Agent nach 30 s nicht angefangen,
+  zeigt das Panel „Der gestartete Agent hat seinen Auftrag nicht bekommen“ mit „Auftrag eintippen“. Automatisch tippt
+  das Plugin nichts: Orca lässt Plugins nur im gerade offenen Workspace tippen, und die Agentenliste verrät nicht
+  verlässlich, ob im Terminal schon ein Agent oder noch eine Shell läuft. Neue Requests `agent.retryPrompt`,
+  `agent.dismissStalled`; `RepoState.stalledAgent`.
+- **Panel hängt nicht mehr beim Laden:** Scheiterte das erste Laden, drehte sich der Ladekreis für immer. Jetzt
+  erscheint der Fehler mit „Erneut laden“. Der Review-Tab zeigt den Fehler ebenfalls statt „Keine Daten“.
+- **Zum Agenten:** Der Workspace wird vor dem Terminal gezeigt; klappt das Fokussieren nicht, steht der Grund im Log.
+
+### Geändert
+- **Große Repositories:** Die Tabellen im Panel (Dateien, Commits, Workspaces) zeigen je 200 Zeilen und laden beim
+  Scrollen nach. Der Review-Tab baut beim Dateiwechsel nur den Inhalt neu; die Dateiliste zeigt 500 Einträge, der Diff
+  3000 Zeilen, jeweils mit „Weitere … zeigen“.
+
 ### Repository
 - **Öffentliche Commit-Identität erzwungen:** Der Pre-commit-Hook verlangt eine GitHub-noreply-Adresse, statt nur
   bekannte private Muster abzuweisen. Die CI prüft zusätzlich jeden neuen Commit (Autor, Committer,

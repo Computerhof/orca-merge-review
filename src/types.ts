@@ -69,6 +69,8 @@ export interface RepoState {
   suggestedTest: { command: string; because: string } | null
   /** The Orca project this workspace belongs to, for labels ("Tests für amt-attest-v2"). */
   projectName: string | null
+  /** An agent this panel started that never began its prompt (Orca did not send it). */
+  stalledAgent: { terminalId: string } | null
   /** Why the panel cannot work here, in words for the person; null when it can. */
   problem: string | null
   branch: string | null

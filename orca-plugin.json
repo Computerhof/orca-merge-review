@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "merge-review",
   "name": "Merge & Review",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Review branches and agent workspaces before you merge, predict conflicts, merge, resolve conflicts block by block in a wide tab, and hand reviews or conflicts to agents.",
   "license": "MIT",
   "repository": "https://github.com/Computerhof/orca-merge-review",

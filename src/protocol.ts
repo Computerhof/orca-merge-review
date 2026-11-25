@@ -58,6 +58,10 @@ declare module 'orca' {
     'project.setTestCommand': { input: Ws & { command: string }; output: { testCommand: string | null } }
     /** Stops the running test or probe. */
     'job.cancel': { input: Ws; output: { ok: true } }
+    /** Types the prompt of an agent that did not get it at launch (`RepoState.stalledAgent`). */
+    'agent.retryPrompt': { input: Ws; output: { ok: true } }
+    /** Forgets the stalled agent notice. */
+    'agent.dismissStalled': { input: Ws; output: { ok: true } }
     /** Hides the last job's result. */
     'job.dismiss': { input: Ws; output: { ok: true } }
     /** K10: every workspace of the project, seen from this (base) workspace: agent, ahead/behind, prediction. */
